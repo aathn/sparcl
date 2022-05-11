@@ -77,10 +77,10 @@ sig goSubs : Reader Int (List Int) (List Int)
 def goSubs =
   arr uncons >>>
     arrCase null
-      (arr (\u -> let rev () <- u in rev Nil))
+      (arr (\(rev ()) -> rev Nil))
       (withCtx goSubs >>>
         first sub >>>
-          arr (\xr -> let rev (x, r) <- xr in rev Cons x r))
+          arr (\(rev (x, r)) -> rev Cons x r))
 
 sig subs : rev (List Int) -o rev (List Int)
 def subs xs =
@@ -88,8 +88,8 @@ def subs xs =
   invert (pair r0) (goSubs rev (r0, xs))
 
 sig sub : Reader Int Int Int
-def sub = lift (\mn -> let (m, n) <- mn in (m, n - m))
-               (\mn -> let (m, n) <- mn in (m, n + m))
+def sub = lift (\(m, n) -> (m, n - m))
+               (\(m, n) -> (m, n + m))
 
 sig uncons : rev (List a) -o rev (Either () (a, List a))
 def uncons (rev Nil)         = rev Left  rev () with isLeft
