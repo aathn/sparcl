@@ -1,0 +1,96 @@
+def (.) f g = \x -> f (g x)
+fixity . 90 right
+
+def ($) = \f x -> f x
+fixity $ 0 right
+
+sig fst : forall a b. (a, b) -> a
+def fst (x, _) = x
+
+sig snd : forall a b. (a, b) -> b
+def snd (_, x) = x
+
+sig invert : forall a b. (rev a -o rev b) -> rev b -o rev a
+def invert f = let (x, y) <- unlift f in lift y x
+
+sig fwd : forall a b. (rev a -o rev b) -> a -> b
+def fwd = fst . unlift
+
+sig bwd : forall a b. (rev a -o rev b) -> b -> a
+def bwd = snd . unlift
+
+sig const : forall a p q. (a # p -> a # q -> Bool) -> a -> rev a
+def const eq c =
+  lift (\() -> c)
+       (\c' -> let True <- eq c c' in ())
+       (rev ())
+
+sig pair : rev a -o rev b -o rev (a, b)
+def pair a b = rev (a, b)
+
+data Either a b = Left a | Right b
+
+sig isLeft : Either a b -> Bool
+def isLeft (Left _) = True
+         | _        = False
+
+data List a = Cons a (List a) | Nil
+
+sig null : List a -> Bool
+def null Nil = True
+       | _   = False
+
+type Reader c x y = rev (c, x) -o rev (c, y)
+
+sig arr : (rev a -o rev b) -o Reader c a b
+def arr f (rev (c, a)) = rev (c, f a)
+
+sig (>>>) : Reader d a b -o Reader d b c -o Reader d a c
+def (>>>) ra rb da = rb (ra da)
+
+sig first : Reader c a b -o Reader c (a, d) (b, d)
+def first ra (rev (c, (a, d))) =
+  let rev (c, b) <- ra rev (c, a) in
+  rev (c, rev (b, d))
+
+sig arrInv : Reader c a b -> Reader c b a
+def arrInv = invert
+
+sig arrCase : (c -> Bool) -> Reader d a c -> Reader d b c -> Reader d (Either a b) c
+def arrCase branchP ra rb (rev (d, Left a))  = ra rev (d, a) with branchP . snd
+          | branchP ra rb (rev (d, Right b)) = rb rev (d, b)
+
+sig withCtx : Reader c a b -o Reader d (c, a) (c, b)
+def withCtx = arr
+
+-- sig goSubs : Reader Int (List Int) (List Int)
+-- def goSubs = proc l -> do
+--   case l of
+--   | rev Nil -> returnA -< rev Nil with null
+--   | rev (Cons x xs) -> do
+--     rev (x, r) <- withCtx goSubs -< rev (x, xs)
+--     x' <- sub -< x
+--     returnA -< rev Cons x' r
+--   end
+
+sig goSubs : Reader Int (List Int) (List Int)
+def goSubs =
+  arr uncons >>>
+    arrCase null
+      (arr (\u -> let rev () <- u in rev Nil))
+      (withCtx goSubs >>>
+        first sub >>>
+          arr (\xr -> let rev (x, r) <- xr in rev Cons x r))
+
+sig subs : rev (List Int) -o rev (List Int)
+def subs xs =
+  let r0 <- const eqInt 0 in
+  invert (pair r0) (goSubs rev (r0, xs))
+
+sig sub : Reader Int Int Int
+def sub = lift (\mn -> let (m, n) <- mn in (m, n - m))
+               (\mn -> let (m, n) <- mn in (m, n + m))
+
+sig uncons : rev (List a) -o rev (Either () (a, List a))
+def uncons (rev Nil)         = rev Left  rev () with isLeft
+         | (rev (Cons x xs)) = rev Right rev (x, xs)
