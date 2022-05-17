@@ -19,20 +19,44 @@ def fwd = fst . unlift
 sig bwd : forall a b. (rev a -o rev b) -> b -> a
 def bwd = snd . unlift
 
-sig const : forall a p q. (a # p -> a # q -> Bool) -> a -> rev a
+sig const : (a # p -> a # q -> Bool) -> a -> rev a
 def const eq c =
   lift (\() -> c)
        (\c' -> let True <- eq c c' in ())
        (rev ())
 
+sig copy : (a # p -> a # q -> Bool) -> rev a -o rev (a, a)
+def copy eqA a = pin a (const eqA)
+
 sig pair : rev a -o rev b -o rev (a, b)
 def pair a b = rev (a, b)
+
+sig swap : rev (a, b) -o rev (b, a)
+def swap (rev (a, b)) = rev (b, a)
+
+sig unitl : rev ((), x) -o rev x
+def unitl (rev ((), x)) = x
+
+sig assocr : rev ((a, b), c) -o rev (a, (b, c))
+def assocr (rev ((a, b), c)) = rev (a, rev (b, c))
 
 data Either a b = Left a | Right b
 
 sig isLeft : Either a b -> Bool
 def isLeft (Left _) = True
          | _        = False
+
+sig joinBranch : (a -> Bool) -> rev (Either a a) -o rev a
+def joinBranch branchP (rev Left a)  = a with branchP
+             | branchP (rev Right a) = a
+
+sig mirror : rev (Either a b) -o rev (Either b a)
+def mirror (rev Right a) = rev Left a with isLeft
+         | (rev Left a)  = rev Right a
+
+sig distr : rev (Either a b, c) -o rev (Either (a, c) (b, c))
+def distr (rev (Left  a, c)) = rev Left  rev (a, c) with isLeft
+        | (rev (Right b, c)) = rev Right rev (b, c)
 
 data List a = Cons a (List a) | Nil
 
@@ -53,15 +77,45 @@ def first ra (rev (c, (a, d))) =
   let rev (c, b) <- ra rev (c, a) in
   rev (c, rev (b, d))
 
+sig second : Reader c a b -o Reader c (d, a) (d, b)
+def second ra = arr swap >>> first ra >>> arr swap
+
+sig (***) : Reader e a c -o Reader e b d -o Reader e (a, b) (c, d)
+def (***) ra rb = first ra >>> second rb
+
+sig arrFork : (a # p -> a # q -> Bool) -> Reader d a b -o Reader d a c -o Reader d a (b, c)
+def arrFork eqA rb rc = arr (copy eqA) >>> (rb *** rc)
+
 sig arrInv : Reader c a b -> Reader c b a
 def arrInv = invert
 
+sig left : Reader c a b -> Reader c (Either a d) (Either b d)
+def left ra (rev (c, Left a)) =
+         let rev (c, b) <- ra rev (c, a) in
+         rev (c, rev Left b)
+         with isLeft . snd
+       | ra (rev (c, Right d)) = rev (c, rev Right d)
+
+sig right : Reader c a b -> Reader c (Either d a) (Either d b)
+def right ra = arr mirror >>> left ra >>> arr mirror
+
+sig (+++) : Reader e a c -> Reader e b d -> Reader e (Either a b) (Either c d)
+def (+++) ra rb = left ra >>> right rb
+
 sig arrCase : (c -> Bool) -> Reader d a c -> Reader d b c -> Reader d (Either a b) c
-def arrCase branchP ra rb (rev (d, Left a))  = ra rev (d, a) with branchP . snd
-          | branchP ra rb (rev (d, Right b)) = rb rev (d, b)
+def arrCase branchP ra rb = (ra +++ rb) >>> arr (joinBranch branchP)
 
 sig withCtx : Reader c a b -o Reader d (c, a) (c, b)
 def withCtx = arr
+
+sig get : (c # p -> c # q -> Bool) -> Reader c a (c, a)
+def get eq (rev (c, a)) = let rev (c, c') <- copy eq c in rev (c, rev (c', a))
+
+sig fromReader : (c # p -> c # q -> Bool) -> Reader c x y -o c -> rev x -o rev y
+def fromReader eqC r c x = let c' <- const eqC c in invert (pair c') (r rev (c', x))
+
+sig toReader : (c -> rev x -o rev y) -o Reader c x y
+def toReader f (rev (c, x)) = pin c (\c' -> f c' x)
 
 -- sig goSubs : Reader Int (List Int) (List Int)
 -- def goSubs = proc l -> do
@@ -76,11 +130,11 @@ def withCtx = arr
 sig goSubs : Reader Int (List Int) (List Int)
 def goSubs =
   arr uncons >>>
-    arrCase null
-      (arr (\(rev ()) -> rev Nil))
-      (withCtx goSubs >>>
-        first sub >>>
-          arr (\(rev (x, r)) -> rev Cons x r))
+  arrCase null
+    (arr (\(rev ()) -> rev Nil))
+    (withCtx goSubs >>>
+      first sub >>>
+        arr (\(rev (x, r)) -> rev Cons x r))
 
 sig subs : rev (List Int) -o rev (List Int)
 def subs xs =
@@ -94,3 +148,85 @@ def sub = lift (\(m, n) -> (m, n - m))
 sig uncons : rev (List a) -o rev (Either () (a, List a))
 def uncons (rev Nil)         = rev Left  rev () with isLeft
          | (rev (Cons x xs)) = rev Right rev (x, xs)
+
+data Tree = L | N Int Tree Tree
+
+sig piR : rev Tree -o rev (List Int, List Int)
+def piR (rev L)       = rev (rev Nil, rev Nil) with null . fst
+      | (rev N a l r) =
+        let rev (pr, ir)      <- piR r in
+        let rev (a, (pl, il)) <- piAccSR rev (a, rev (l, rev (pr, ir))) in
+        rev (rev Cons a pl, il)
+
+-- sig piAccSR : Reader Int (Tree, (List Int, List Int)) (List Int, List Int)
+-- def piAccSR = proc (rev (t, pyiy)) -> do
+--   case t of
+--   | rev L -> do
+--     rev (h, (py, iy)) <- get eqInt -< pyiy
+--     get eqInt -< rev (py, rev Cons h iy)
+--     with \(h1, (_, Cons h2 _)) -> eqInt h1 h2
+--   | rev (N a l r) -> do
+--     rev prir          <- piAccSR -< rev (r, pyiy)
+--     rev (a, (pl, il)) <- withCtx piAccSR -< rev (a, rev (l, prir))
+--     get eqInt -< rev (rev Cons a pl, il)
+--   end
+--     >>> arrInv (get eqInt)
+
+sig piAccSR : Reader Int (Tree, (List Int, List Int)) (List Int, List Int)
+def piAccSR =
+  first (arr untree) >>> arr distr >>>
+  arrCase (\(h1, (_, Cons h2 _)) -> eqInt h1 h2)
+    (arr unitl >>> get eqInt >>>
+     arr (\(rev (h, (py, iy))) -> rev (py, rev Cons h iy)) >>> get eqInt)
+    (arr assocr >>> second piAccSR >>>
+     arr assocr >>> withCtx piAccSR >>>
+     arr (\(rev (a, (pl, il))) -> rev (rev Cons a pl, il)) >>> get eqInt) >>>
+  arrInv (get eqInt)
+
+sig untree : rev Tree -o rev (Either () ((Int, Tree), Tree))
+def untree (rev L)         = rev Left  rev () with isLeft
+         | (rev (N a l r)) = rev Right rev (rev (a, l), r)
+
+-- type Symbol = Char
+-- data Huff = Lf Symbol | Br Huff Huff
+
+-- data Bit = Z | O
+
+-- sig decR : Huff -> rev (List Bit) -o rev (Symbol, List Bit)
+-- def decR (Lf s)   ys = rev (const eqChar s, ys)
+--        | (Br l r) ys = case ys of
+--          | rev (Cons Z ys') -> decR l ys' with (\(s, _) ->  member s l)
+--          | rev (Cons O ys') -> decR r ys'
+--          end
+
+-- sig encR : Huff -> rev Symbol -o rev (List Bit) -o rev (List Bit)
+-- def encR h s ys = invert (decR h) (rev (s, ys))
+
+-- sig member : Symbol -> Huff -> Bool
+-- def member s (Lf s')  = eqChar s s'
+--          | s (Br l r) =
+--            case member s l of
+--            | True  -> True
+--            | False -> member s r
+--            end
+
+-- sig makeHuff : rev (List Symbol) -o rev (List Symbol, Huff)
+-- def makeHuff s = rev (s, Br (Lf 'a') (Br (Lf 'b') (Br (Lf 'c') (Lf 'd'))))
+
+-- sig eqHuff : Huff -> Huff -> Bool
+-- def eqHuff (Lf s)   (Lf s') = eqChar s s'
+--         |  (Br l r) (Br l' r') =
+--           case eqHuff l l' of
+--           | True  -> eqHuff r r'
+--           | False -> False
+--           end
+--         |  _         _ = False
+
+-- sig encode : Reader Huff (List Symbol) (List Bit)
+-- def encode h (rev Nil)       = rev Nil with null
+--          | h (rev Cons s ss) = encR h s (encode h ss)
+
+-- sig huffCompress : rev (List Symbol) -o rev (Huff, List Bit)
+-- def huffCompress s = case pin s (\s' -> const eqHuff (makeHuff s')) of
+--          | rev (s, h) -> pin h (\h' -> encode h' s)
+--          end
