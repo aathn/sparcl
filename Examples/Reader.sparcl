@@ -111,6 +111,9 @@ def withCtx = arr
 sig get : (c # p -> c # q -> Bool) -> Reader c a (c, a)
 def get eq (rev (c, a)) = let rev (c, c') <- copy eq c in rev (c, rev (c', a))
 
+sig assert : (c # p -> c # q -> Bool) -> Reader c (c, a) a
+def assert eq = arrInv (get eq)
+
 sig fromReader : (c # p -> c # q -> Bool) -> Reader c x y -o c -> rev x -o rev y
 def fromReader eqC r c x = let c' <- const eqC c in invert (pair c') (r rev (c', x))
 
@@ -170,7 +173,7 @@ def piR (rev L)       = rev (rev Nil, rev Nil) with null . fst
 --     rev (a, (pl, il)) <- withCtx piAccSR -< rev (a, rev (l, prir))
 --     get eqInt -< rev (rev Cons a pl, il)
 --   end
---     >>> arrInv (get eqInt)
+--     >>> assert eqInt
 
 sig piAccSR : Reader Int (Tree, (List Int, List Int)) (List Int, List Int)
 def piAccSR =
@@ -181,52 +184,100 @@ def piAccSR =
     (arr assocr >>> second piAccSR >>>
      arr assocr >>> withCtx piAccSR >>>
      arr (\(rev (a, (pl, il))) -> rev (rev Cons a pl, il)) >>> get eqInt) >>>
-  arrInv (get eqInt)
+  assert eqInt
 
 sig untree : rev Tree -o rev (Either () ((Int, Tree), Tree))
 def untree (rev L)         = rev Left  rev () with isLeft
          | (rev (N a l r)) = rev Right rev (rev (a, l), r)
 
--- type Symbol = Char
--- data Huff = Lf Symbol | Br Huff Huff
+type Symbol = Char
+data Huff   = Lf Symbol | Br Huff Huff
 
--- data Bit = Z | O
+sig isLf : Huff -> Bool
+def isLf (Lf _) = True
+       | _      = False
 
--- sig decR : Huff -> rev (List Bit) -o rev (Symbol, List Bit)
--- def decR (Lf s)   ys = rev (const eqChar s, ys)
---        | (Br l r) ys = case ys of
---          | rev (Cons Z ys') -> decR l ys' with (\(s, _) ->  member s l)
---          | rev (Cons O ys') -> decR r ys'
---          end
+sig member : Symbol -> Huff -> Bool
+def member s (Lf s')  = eqChar s s'
+         | s (Br l r) =
+           case member s l of
+           | True  -> True
+           | False -> member s r
+           end
 
--- sig encR : Huff -> rev Symbol -o rev (List Bit) -o rev (List Bit)
--- def encR h s ys = invert (decR h) (rev (s, ys))
+sig eqHuff : Huff -> Huff -> Bool
+def eqHuff (Lf s)   (Lf s') = eqChar s s'
+        |  (Br l r) (Br l' r') =
+          case eqHuff l l' of
+          | True  -> eqHuff r r'
+          | False -> False
+          end
+        |  _         _ = False
 
--- sig member : Symbol -> Huff -> Bool
--- def member s (Lf s')  = eqChar s s'
---          | s (Br l r) =
---            case member s l of
---            | True  -> True
---            | False -> member s r
---            end
+sig unhuff : rev Huff -o rev (Either Symbol (Huff, Huff))
+def unhuff (rev Lf s)   = rev Left  s          with isLeft
+         | (rev Br l r) = rev Right rev (l, r)
 
--- sig makeHuff : rev (List Symbol) -o rev (List Symbol, Huff)
--- def makeHuff s = rev (s, Br (Lf 'a') (Br (Lf 'b') (Br (Lf 'c') (Lf 'd'))))
+data Bit = Z | O
 
--- sig eqHuff : Huff -> Huff -> Bool
--- def eqHuff (Lf s)   (Lf s') = eqChar s s'
---         |  (Br l r) (Br l' r') =
---           case eqHuff l l' of
---           | True  -> eqHuff r r'
---           | False -> False
---           end
---         |  _         _ = False
+sig unbit : rev (List Bit) -o rev (Either (List Bit) (List Bit))
+def unbit (rev Cons Z l) = rev Left  l with isLeft
+        | (rev Cons O l) = rev Right l
+
+-- sig decR : Reader Huff (List Bit) (Symbol, List Bit)
+-- def decR = proc ys -> do
+--   rev (huff, ys) <- get eqHuff -< ys
+--   case huff of
+--   | rev Lf s   -> get eqHuff -< rev (s, ys) with isLf . fst
+--   | rev Br l r ->
+--     case ys of
+--     | rev (Cons Z ys') -> do
+--       rev (l, res) <- withCtx decR -< rev (l, ys')
+--       returnA -< rev (rev Br l r, res) with (\(Br l r, (s,_)) -> member s l)
+--     | rev (Cons O ys') -> do
+--       rev (r, res) <- withCtx decR -< rev (r, ys')
+--       returnA -< rev (rev Br l r, res)
+--     end
+--   end
+--     >>> assert eqHuff
+
+sig decR : Reader Huff (List Bit) (Symbol, List Bit)
+def decR =
+  get eqHuff >>> first (arr unhuff) >>> arr distr >>>
+  arrCase (isLf . fst)
+    (get eqHuff)
+    (arr swap >>> first (arr unbit) >>> arr distr >>>
+     arrCase (\(Br l r, (s,_)) -> member s l)
+       (arr swap >>> first (arr swap) >>> arr assocr >>> second (withCtx decR) >>>
+        arrInv (arr assocr) >>> first (arr (\(rev (r, l)) -> rev Br l r)))
+       (arr swap >>> arr assocr >>> second (withCtx decR) >>>
+        arrInv (arr assocr) >>> first (arr (\(rev (l, r)) -> rev Br l r)))) >>>
+  assert eqHuff
+
+sig encR : Reader Huff (Symbol, List Bit) (List Bit)
+def encR = arrInv decR
 
 -- sig encode : Reader Huff (List Symbol) (List Bit)
--- def encode h (rev Nil)       = rev Nil with null
---          | h (rev Cons s ss) = encR h s (encode h ss)
+-- def encode = proc l ->
+--   case l of
+--   | rev Nil       -> returnA -< rev Nil with null
+--   | rev Cons s ss -> do
+--       rest <- encode -< ss
+--       encR -< rev (s, rest)
+--   end
 
--- sig huffCompress : rev (List Symbol) -o rev (Huff, List Bit)
--- def huffCompress s = case pin s (\s' -> const eqHuff (makeHuff s')) of
---          | rev (s, h) -> pin h (\h' -> encode h' s)
---          end
+sig encode : Reader Huff (List Symbol) (List Bit)
+def encode =
+  arr uncons >>>
+  arrCase null
+    (arr (\(rev ()) -> rev Nil))
+    (second encode >>> encR)
+
+sig dummyHuff : Huff
+def dummyHuff = Br (Lf 'a') (Br (Lf 'b') (Br (Lf 'c') (Lf 'd')))
+
+sig makeHuff : rev (List Symbol) -o rev (Huff, List Symbol)
+def makeHuff s = rev (const eqHuff dummyHuff, s)
+
+sig huffCompress : rev (List Symbol) -o rev (Huff, List Bit)
+def huffCompress = encode . makeHuff
