@@ -105,8 +105,42 @@ def (+++) ra rb = left ra >>> right rb
 sig arrCase : (c -> Bool) -> Reader d a c -> Reader d b c -> Reader d (Either a b) c
 def arrCase branchP ra rb = (ra +++ rb) >>> arr (joinBranch branchP)
 
+-- sig pin : rev a -o (a -> rev b) -o rev (a, b)
+--         ~ rev a -o (a -> a') -> (a' -> rev b) -o rev (a, b)
+
+-- Informally, a -> rev b has two parts:
+--  + One which allows discarding, which we can model as a function (a -> a')
+--  + One which allows copying, which we can model as a function (a' -> rev b)
+-- Of course, both of these allow the user both to copy and discard, but we
+-- may introduce this separation to produce an equivalent version of pin:
+
+sig myPin : rev a -o (a -> a') -> (a' -> rev b) -o rev (a, b)
+def myPin a f g = pin a (g . f)
+
+sig myPin' : rev a -o (a -> rev b) -o rev (a, b)
+def myPin' a f = myPin a (\x -> x) f
+
+-- Now, we may translate these parts to produce a completely reversible version.
+-- The part which allows discarding, we can take as a function (rev a -o rev (a', h)),
+-- where h represents a garbage heap of data we don't need.
+-- The part which allows copying, we can take as a function (rev a' -o rev (a', b)),
+-- where a' is used as a static parameter during computation, and part of it
+-- is copied in order to produce b.
+
+sig revPin : rev a -o (rev a -o rev (a', h)) -> (rev a' -o rev (a', b)) -o rev (a, b)
+def revPin a f g =
+  let rev (a', h) <- f a in
+  let rev (a', b) <- g a' in
+  let a <- invert f rev (a', h) in
+  rev (a, b)
+
+sig localCtx : (rev (s, a) -o rev (s', h)) -> Reader s' b c -o Reader s (a, b) (a, c)
+def localCtx f rb (rev (s, (a, b))) =
+  let rev ((s, a), c) <- revPin rev (s, a) f (\s' -> rb rev (s', b)) in
+  rev (s, rev (a, c))
+
 sig withCtx : Reader c a b -o Reader d (c, a) (c, b)
-def withCtx = arr
+def withCtx = localCtx swap -- = arr
 
 sig get : (c # p -> c # q -> Bool) -> Reader c a (c, a)
 def get eq (rev (c, a)) = let rev (c, c') <- copy eq c in rev (c, rev (c', a))
