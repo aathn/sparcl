@@ -4,41 +4,62 @@ fixity . 90 right
 def ($) = \f x -> f x
 fixity $ 0 right
 
-sig fst : forall a b. (a, b) -> a
+sig id : a # p -> a
+def id x = x
+
+sig fst : (a, b) -> a
 def fst (x, _) = x
 
-sig snd : forall a b. (a, b) -> b
+sig snd : (a, b) -> b
 def snd (_, x) = x
 
-sig invert : forall a b. (rev a -o rev b) -> rev b -o rev a
-def invert f = let (x, y) <- unlift f in lift y x
+sig inv : (rev a -o rev b) -> rev b -o rev a
+def inv f = let (x, y) <- unlift f in lift y x
 
-sig fwd : forall a b. (rev a -o rev b) -> a -> b
+sig fwd : (rev a -o rev b) -> a -> b
 def fwd = fst . unlift
 
-sig bwd : forall a b. (rev a -o rev b) -> b -> a
+sig bwd : (rev a -o rev b) -> b -> a
 def bwd = snd . unlift
 
-sig const : (a # p -> a # q -> Bool) -> a -> rev a
-def const eq c =
+sig new : (a # p -> a # q -> Bool) -> a -> rev a
+def new eq c =
   lift (\() -> c)
        (\c' -> let True <- eq c c' in ())
        (rev ())
 
 sig copy : (a # p -> a # q -> Bool) -> rev a -o rev (a, a)
-def copy eqA a = pin a (const eqA)
+def copy eqA a = pin a (new eqA)
 
-sig pair : rev a -o rev b -o rev (a, b)
-def pair a b = rev (a, b)
+sig mapPair : (rev a -o rev c) -o (rev b -o rev d) -o rev (a, b) -o rev (c, d)
+def mapPair f g (rev (x, y)) = rev (f x, g y)
+
+sig mapFst : (rev a -o rev b) -o rev (a, c) -o rev (b, c)
+def mapFst f = mapPair f id
+
+sig mapSnd : (rev a -o rev b) -o rev (c, a) -o rev (c, b)
+def mapSnd f = mapPair id f
 
 sig swap : rev (a, b) -o rev (b, a)
 def swap (rev (a, b)) = rev (b, a)
 
+sig pairr : rev a -o rev b -o rev (b, a)
+def pairr a b = rev (b, a)
+
+sig pairl : rev a -o rev b -o rev (a, b)
+def pairl a = swap . pairr a
+
+sig unitr : rev (x, ()) -o rev x
+def unitr (rev (x, ())) = x
+
 sig unitl : rev ((), x) -o rev x
-def unitl (rev ((), x)) = x
+def unitl = unitr . swap
 
 sig assocr : rev ((a, b), c) -o rev (a, (b, c))
 def assocr (rev ((a, b), c)) = rev (a, rev (b, c))
+
+sig assocl : rev (a, (b, c)) -o rev ((a, b), c)
+def assocl = inv assocr
 
 data Either a b = Left a | Right b
 
@@ -67,10 +88,10 @@ def null Nil = True
 type Reader c x y = rev (c, x) -o rev (c, y)
 
 sig arr : (rev a -o rev b) -o Reader c a b
-def arr f (rev (c, a)) = rev (c, f a)
+def arr = mapSnd
 
 sig (>>>) : Reader d a b -o Reader d b c -o Reader d a c
-def (>>>) ra rb da = rb (ra da)
+def (>>>) ra rb = rb . ra
 
 sig first : Reader c a b -o Reader c (a, d) (b, d)
 def first ra (rev (c, (a, d))) =
@@ -87,7 +108,7 @@ sig arrFork : (a # p -> a # q -> Bool) -> Reader d a b -o Reader d a c -o Reader
 def arrFork eqA rb rc = arr (copy eqA) >>> (rb *** rc)
 
 sig arrInv : Reader c a b -> Reader c b a
-def arrInv = invert
+def arrInv = inv
 
 sig left : Reader c a b -> Reader c (Either a d) (Either b d)
 def left ra (rev (c, Left a)) =
@@ -105,64 +126,41 @@ def (+++) ra rb = left ra >>> right rb
 sig arrCase : (c -> Bool) -> Reader d a c -> Reader d b c -> Reader d (Either a b) c
 def arrCase branchP ra rb = (ra +++ rb) >>> arr (joinBranch branchP)
 
--- sig pin : rev a -o (a -> rev b) -o rev (a, b)
---         ~ rev a -o (a -> a') -> (a' -> rev b) -o rev (a, b)
+sig transformCtx : (rev s -o rev s') -> Reader s' a b -o Reader s a b
+def transformCtx f r = inv (mapFst f) . r . mapFst f
 
--- Informally, a -> rev b has two parts:
---  + One which allows discarding, which we can model as a function (a -> a')
---  + One which allows copying, which we can model as a function (a' -> rev b)
--- Of course, both of these allow the user both to copy and discard, but we
--- may introduce this separation to produce an equivalent version of pin:
+sig extendCtx : Reader s a b -o Reader (s, s') a b
+def extendCtx ra = mapFst swap . assocl . mapSnd ra . assocr . mapFst swap
 
-sig myPin : rev a -o (a -> a') -> (a' -> rev b) -o rev (a, b)
-def myPin a f g = pin a (g . f)
+sig shrinkCtx : Reader (s, s') a b -o Reader s (s', a) (s', b)
+def shrinkCtx r = assocr . r . assocl
 
-sig myPin' : rev a -o (a -> rev b) -o rev (a, b)
-def myPin' a f = myPin a (\x -> x) f
+sig revPin : (rev s -o rev (s', h)) -> Reader s' a b -o Reader s a b
+def revPin f = transformCtx f . extendCtx
 
--- Now, we may translate these parts to produce a completely reversible version.
--- The part which allows discarding, we can take as a function (rev a -o rev (a', h)),
--- where h represents a garbage heap of data we don't need.
--- The part which allows copying, we can take as a function (rev a' -o rev (a', b)),
--- where a' is used as a static parameter during computation, and part of it
--- is copied in order to produce b.
-
-type RFun a b    = rev a -o rev b
-type DFun a a' h = RFun a (a', h)
-type CFun a b    = RFun a (a , b)
-
-sig revPin : rev a -o DFun a a' h -> CFun a' b -o rev (a, b)
-def revPin a f g =
-  let rev (a', h) <- f a in
-  let rev (a', b) <- g a' in
-  let a <- invert f rev (a', h) in
-  rev (a, b)
-
-sig revPin' : rev a -o RFun a a' -> CFun a' b -o rev (a, b)
-def revPin' a f = revPin a (\a -> rev (f a, rev ()))
-
-sig localCtx : DFun (s, a) s' h -> Reader s' b c -o Reader s (a, b) (a, c)
-def localCtx f rb (rev (s, (a, b))) =
-  let rev ((s, a), c) <- revPin rev (s, a) f (\s' -> rb rev (s', b)) in
-  rev (s, rev (a, c))
+sig localCtx : (rev (s, a) -o rev (s', h)) -> Reader s' b c -o Reader s (a, b) (a, c)
+def localCtx f = shrinkCtx . transformCtx f . extendCtx
 
 sig withCtx : Reader c a b -o Reader d (c, a) (c, b)
 def withCtx = localCtx swap -- = arr
 
 sig get : (c # p -> c # q -> Bool) -> Reader c a (c, a)
-def get eq (rev (c, a)) = let rev (c, c') <- copy eq c in rev (c, rev (c', a))
+def get eq = assocr . mapFst (copy eq)
 
 sig assert : (c # p -> c # q -> Bool) -> Reader c (c, a) a
 def assert eq = arrInv (get eq)
 
-sig runReader : Reader c x y -o rev c -> rev x -o rev y
-def runReader r c x = invert (pair c) (r rev (c, x))
+sig apR : Reader c x y -o rev c -> rev x -o rev y
+def apR r c = inv (pairl c) . r . pairl c
 
 sig fromReader : (c # p -> c # q -> Bool) -> Reader c x y -o c -> rev x -o rev y
-def fromReader eqC r c x = let c' <- const eqC c in runReader r c' x
+def fromReader eqC r c x = let c' <- new eqC c in apR r c' x
 
 sig toReader : (c -> rev x -o rev y) -o Reader c x y
 def toReader f (rev (c, x)) = pin c (\c' -> f c' x)
+
+sig apC : Reader a () b -o rev a -o rev (a, b)
+def apC f = f . inv unitr
 
 -- sig goSubs : Reader Int (List Int) (List Int)
 -- def goSubs = proc l -> do
@@ -184,7 +182,7 @@ def goSubs =
         arr (\(rev (x, r)) -> rev Cons x r))
 
 sig subs : rev (List Int) -o rev (List Int)
-def subs xs = runReader goSubs (const eqInt 0) xs
+def subs xs = apR goSubs (new eqInt 0) xs
 
 sig sub : Reader Int Int Int
 def sub = lift (\(m, n) -> (m, n - m)) (\(m, n) -> (m, n + m))
@@ -290,9 +288,9 @@ def decR =
     (arr swap >>> first (arr unbit) >>> arr distr >>>
      arrCase (\(Br l r, (s,_)) -> member s l)
        (arr swap >>> first (arr swap) >>> arr assocr >>> second (withCtx decR) >>>
-        arrInv (arr assocr) >>> first (arr (\(rev (r, l)) -> rev Br l r)))
+        arr assocl >>> first (arr (\(rev (r, l)) -> rev Br l r)))
        (arr swap >>> arr assocr >>> second (withCtx decR) >>>
-        arrInv (arr assocr) >>> first (arr (\(rev (l, r)) -> rev Br l r)))) >>>
+        arr assocl >>> first (arr (\(rev (l, r)) -> rev Br l r)))) >>>
   assert eqHuff
 
 sig encR : Reader Huff (Symbol, List Bit) (List Bit)
@@ -318,14 +316,14 @@ sig dummyHuff : Huff
 def dummyHuff = Br (Lf 'a') (Br (Lf 'b') (Br (Lf 'c') (Lf 'd')))
 
 sig makeHuff : rev (List Symbol) -o rev (Huff, List Symbol)
-def makeHuff s = rev (const eqHuff dummyHuff, s)
+def makeHuff s = rev (new eqHuff dummyHuff, s)
 
 sig huffCompress : rev (List Symbol) -o rev (Huff, List Bit)
 def huffCompress = encode . makeHuff
 
 
-sig delete : (a # p -> a # q -> Bool) -> a -> rev a -o rev ()
-def delete eq c = invert (\(rev ()) -> const eq c)
+sig del : (a # p -> a # q -> Bool) -> a -> rev a -o rev ()
+def del eq c = inv (\(rev ()) -> new eq c)
 
 sig and : Bool -> Bool -> Bool
 def and True True = True
@@ -415,8 +413,8 @@ def lz77 input =
 --     rev (pair, (h, t)) <- maxMatch -< rev (h, t)
 --     case pair of
 --     | rev Nothing ->
---       rev (oneH, lzRest) <- localCtx updateWindow goLz77 -< rev (rev (const eqInt 1, rev Cons h rev Nil), t)
---       let rev (Cons h Nil) <- invert (pair (const eqInt 1)) oneH in
+--       rev (oneH, lzRest) <- localCtx updateWindow goLz77 -< rev (rev (new eqInt 1, rev Cons h rev Nil), t)
+--       let rev (Cons h Nil) <- inv (pairl (new eqInt 1)) oneH in
 --       returnA -< rev Cons (rev Lit h) lzRest
 --       with isLit . head
 --     | rev Just (d, l) ->
@@ -435,26 +433,26 @@ def goLz77 =
     (maxMatch >>> first (arr unmaybe) >>> arr distr >>>
      arrCase (isLit . head)
       (arr unitl >>> first (arr (\h -> rev Cons h rev Nil)) >>>
-       arr (invert assocr . pair (const eqInt 1)) >>>
-       localCtx updateWindow goLz77 >>> arr (invert (pair (const eqInt 1)) . assocr) >>>
+       arr (assocl . pairl (new eqInt 1)) >>>
+       localCtx updateWindow goLz77 >>> arr (inv (pairl (new eqInt 1)) . assocr) >>>
        arr (\(rev (Cons h Nil, lzRest)) -> rev Cons (rev Lit h) lzRest))
       (second (arr (\(rev (h, t)) -> rev Cons h t)) >>> arr assocr >>>
-       second (withCtx split >>> arr (invert assocr) >>> localCtx updateWindow goLz77) >>>
-       arr (invert assocr) >>> first (arr (invert assocr) >>> deleteMatch) >>>
+       second (withCtx split >>> arr assocl >>> localCtx updateWindow goLz77) >>>
+       arr assocl >>> first (arr assocl >>> deleteMatch) >>>
        arr (\(rev (p, lzRest)) -> rev Cons (rev Pair p) lzRest)))
 
 sig updateWindow : rev (List Symbol, (Int, List Symbol)) -o rev (List Symbol, (Int, List Symbol))
 def updateWindow (rev (window, (len, match))) =
-  let wl <- const eqInt winLength in
+  let wl <- new eqInt winLength in
   let rev (len, (winit, wlast)) <-
-    revPin len (\l -> swap (sub rev (l, wl))) (\l' -> split rev (l', window)) in
+    revPin (inv swap . sub . swap . pairl wl) split rev (len, window) in
   let rev (len, newWin) <- concat rev (len, rev (reverse match, winit)) in
   rev (newWin, rev (len, wlast))
 
 sig maxMatch : Reader (List Symbol) (Symbol, List Symbol) (Maybe (Int, Int), (Symbol, List Symbol))
 def maxMatch wi =
   let rev ((window, input), pair) <-
-    pin wi (\(window, (h, t)) -> const eqMaybeIntPair (maxMatch' window (Cons h t))) in
+    pin wi (\(window, (h, t)) -> new eqMaybeIntPair (maxMatch' window (Cons h t))) in
   rev (window, rev (pair, input))
   where
     def eqMaybeIntPair = eqMaybe (eqPair eqInt eqInt)
@@ -505,23 +503,23 @@ sig revBool : Bool -o rev Bool
 def revBool True  = rev True
           | False = rev False
 
-sig eqIntC : CFun (Int, Int) Bool
-def eqIntC (rev (x, y)) =
-  pin rev (x, y) (\(x, y) -> revBool (eqInt x y))
+sig eqIntC : Reader (Int, Int) () Bool
+def eqIntC = f . unitr
+  where def f p = pin p (\(x, y) -> revBool (eqInt x y)) end
 
 sig reverse : rev (List Symbol) -o rev (List Symbol)
 def reverse l =
-  let rev (l, len)  <- pin l (const eqInt . length) in
+  let rev (l, len)  <- pin l (new eqInt . length) in
   let rev (Nil, l') <- goReverse len l in l'
   where
     def goReverse n l =
-      let rev (n, eq0) <- revPin' n (\n -> rev (n, const eqInt 0)) eqIntC in
+      let rev (n, eq0) <- apC (transformCtx (pairl (new eqInt 0)) eqIntC) n in
       case eq0 of
       | rev True  ->
-        let rev () <- delete eqInt 0 n in
+        let rev () <- del eqInt 0 n in
         rev (l, rev Nil) with null . snd
       | rev False ->
-        let n' <- runReader sub (const eqInt 1) n in
+        let n' <- apR sub (new eqInt 1) n in
         case goReverse n' l of
         | rev (Cons h t, l') -> rev (t, rev Cons h l')
         end
@@ -531,7 +529,7 @@ def reverse l =
 sig deleteMatch : Reader (List Symbol) ((Int, Int), List Symbol) (Int, Int)
 def deleteMatch (rev (window, (pair, match))) =
   let rev ((window, pair), ()) <- pin rev (window, pair)
-    (\(window, pair) -> delete (eqList eqChar) (getMatch window pair) match) in
+    (\(window, pair) -> del (eqList eqChar) (getMatch window pair) match) in
   rev (window, pair)
   where
     def getMatch window (d, l) = repeatTake l (revTake d window)
