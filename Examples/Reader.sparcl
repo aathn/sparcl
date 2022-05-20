@@ -127,14 +127,21 @@ def myPin' a f = myPin a (\x -> x) f
 -- where a' is used as a static parameter during computation, and part of it
 -- is copied in order to produce b.
 
-sig revPin : rev a -o (rev a -o rev (a', h)) -> (rev a' -o rev (a', b)) -o rev (a, b)
+type RFun a b    = rev a -o rev b
+type DFun a a' h = RFun a (a', h)
+type CFun a b    = RFun a (a , b)
+
+sig revPin : rev a -o DFun a a' h -> CFun a' b -o rev (a, b)
 def revPin a f g =
   let rev (a', h) <- f a in
   let rev (a', b) <- g a' in
   let a <- invert f rev (a', h) in
   rev (a, b)
 
-sig localCtx : (rev (s, a) -o rev (s', h)) -> Reader s' b c -o Reader s (a, b) (a, c)
+sig revPin' : rev a -o RFun a a' -> CFun a' b -o rev (a, b)
+def revPin' a f = revPin a (\a -> rev (f a, rev ()))
+
+sig localCtx : DFun (s, a) s' h -> Reader s' b c -o Reader s (a, b) (a, c)
 def localCtx f rb (rev (s, (a, b))) =
   let rev ((s, a), c) <- revPin rev (s, a) f (\s' -> rb rev (s', b)) in
   rev (s, rev (a, c))
@@ -148,8 +155,11 @@ def get eq (rev (c, a)) = let rev (c, c') <- copy eq c in rev (c, rev (c', a))
 sig assert : (c # p -> c # q -> Bool) -> Reader c (c, a) a
 def assert eq = arrInv (get eq)
 
+sig runReader : Reader c x y -o rev c -> rev x -o rev y
+def runReader r c x = invert (pair c) (r rev (c, x))
+
 sig fromReader : (c # p -> c # q -> Bool) -> Reader c x y -o c -> rev x -o rev y
-def fromReader eqC r c x = let c' <- const eqC c in invert (pair c') (r rev (c', x))
+def fromReader eqC r c x = let c' <- const eqC c in runReader r c' x
 
 sig toReader : (c -> rev x -o rev y) -o Reader c x y
 def toReader f (rev (c, x)) = pin c (\c' -> f c' x)
@@ -174,9 +184,7 @@ def goSubs =
         arr (\(rev (x, r)) -> rev Cons x r))
 
 sig subs : rev (List Int) -o rev (List Int)
-def subs xs =
-  let r0 <- const eqInt 0 in
-  invert (pair r0) (goSubs rev (r0, xs))
+def subs xs = runReader goSubs (const eqInt 0) xs
 
 sig sub : Reader Int Int Int
 def sub = lift (\(m, n) -> (m, n - m)) (\(m, n) -> (m, n + m))
@@ -435,13 +443,13 @@ def goLz77 =
        arr (invert assocr) >>> first (arr (invert assocr) >>> deleteMatch) >>>
        arr (\(rev (p, lzRest)) -> rev Cons (rev Pair p) lzRest)))
 
-sig updateWindow : rev (List Symbol, (Int, List Symbol)) -o rev (List Symbol, (Int, Int, List Symbol))
+sig updateWindow : rev (List Symbol, (Int, List Symbol)) -o rev (List Symbol, (Int, List Symbol))
 def updateWindow (rev (window, (len, match))) =
-  let winLength <- const eqInt winLength in
-  let rev (len, (winLength, (winit, wlast))) <-
-    localCtx (swap . sub) split rev (len, rev (winLength, window)) in
-  let rev (len, newWin) <- invert split rev (len, rev (reverse match, winit)) in
-  rev (newWin, rev (len, winLength, wlast))
+  let wl <- const eqInt winLength in
+  let rev (len, (winit, wlast)) <-
+    revPin len (\l -> swap (sub rev (l, wl))) (\l' -> split rev (l', window)) in
+  let rev (len, newWin) <- concat rev (len, rev (reverse match, winit)) in
+  rev (newWin, rev (len, wlast))
 
 sig maxMatch : Reader (List Symbol) (Symbol, List Symbol) (Maybe (Int, Int), (Symbol, List Symbol))
 def maxMatch wi =
@@ -490,13 +498,34 @@ def split (rev (len, list)) = pin len (\l' -> split' l' list)
                end
   end
 
+sig concat : Reader Int (List Symbol, List Symbol) (List Symbol)
+def concat = arrInv split
+
+sig revBool : Bool -o rev Bool
+def revBool True  = rev True
+          | False = rev False
+
+sig eqIntC : CFun (Int, Int) Bool
+def eqIntC (rev (x, y)) =
+  pin rev (x, y) (\(x, y) -> revBool (eqInt x y))
+
 sig reverse : rev (List Symbol) -o rev (List Symbol)
-def reverse (rev Nil)      = rev Nil with null
-          | (rev Cons h t) = let revT <- reverse t in
-                             putLast h revT
+def reverse l =
+  let rev (l, len)  <- pin l (const eqInt . length) in
+  let rev (Nil, l') <- goReverse len l in l'
   where
-    def putLast h (rev Nil)       = rev Cons h  (rev Nil) with null . tail
-              | h (rev Cons h' t) = rev Cons h' (putLast h t)
+    def goReverse n l =
+      let rev (n, eq0) <- revPin' n (\n -> rev (n, const eqInt 0)) eqIntC in
+      case eq0 of
+      | rev True  ->
+        let rev () <- delete eqInt 0 n in
+        rev (l, rev Nil) with null . snd
+      | rev False ->
+        let n' <- runReader sub (const eqInt 1) n in
+        case goReverse n' l of
+        | rev (Cons h t, l') -> rev (t, rev Cons h l')
+        end
+      end
   end
 
 sig deleteMatch : Reader (List Symbol) ((Int, Int), List Symbol) (Int, Int)
