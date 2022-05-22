@@ -126,23 +126,39 @@ def (+++) ra rb = left ra >>> right rb
 sig arrCase : (c -> Bool) -> Reader d a c -> Reader d b c -> Reader d (Either a b) c
 def arrCase branchP ra rb = (ra +++ rb) >>> arr (joinBranch branchP)
 
-sig transformCtx : (rev s -o rev s') -> Reader s' a b -o Reader s a b
-def transformCtx f r = inv (mapFst f) . r . mapFst f
+-- type HFun a b = exist h g. rev (h, a) -o rev (g, b)
 
-sig extendCtx : Reader s a b -o Reader (s, s') a b
-def extendCtx ra = mapFst swap . assocl . mapSnd ra . assocr . mapFst swap
+-- sig erase : HFun a ()
+-- def erase = inv unitl
 
-sig shrinkCtx : Reader (s, s') a b -o Reader s (s', a) (s', b)
-def shrinkCtx r = assocr . r . assocl
+type CFun a b = rev a -o rev (a, b)
 
-sig revPin : (rev s -o rev (s', h)) -> Reader s' a b -o Reader s a b
-def revPin f = transformCtx f . extendCtx
+sig conjC : (rev a -o rev a') -> CFun a' b -o CFun a b
+def conjC f cf = inv (mapFst f) . cf . f
 
-sig localCtx : (rev (s, a) -o rev (s', h)) -> Reader s' b c -o Reader s (a, b) (a, c)
-def localCtx f = shrinkCtx . transformCtx f . extendCtx
+sig extendC : CFun a b -o CFun (a, a') b
+def extendC cf = assocl . mapSnd swap . assocr . mapFst cf
 
-sig withCtx : Reader c a b -o Reader d (c, a) (c, b)
-def withCtx = localCtx swap -- = arr
+sig revPin : (rev a -o rev (a', h)) -> CFun a' b -o CFun a b
+def revPin f = conjC f . extendC
+
+sig conjR : (rev s -o rev s') -> Reader s' a b -o Reader s a b
+def conjR f r (rev (s, a)) = conjC f (\s -> r rev (s, a)) s
+
+sig extendR : Reader s a b -o Reader (s, s') a b
+def extendR r (rev (ss', a)) = extendC (\s -> r rev (s, a)) ss'
+
+sig mutateR : (rev s -o rev (s', h)) -> Reader s' a b -o Reader s a b
+def mutateR f = conjR f . extendR
+
+sig shrinkR : Reader (s, s') a b -o Reader s (s', a) (s', b)
+def shrinkR r = assocr . r . assocl
+
+sig localR : (rev (s, a) -o rev (s', h)) -> Reader s' b c -o Reader s (a, b) (a, c)
+def localR f = shrinkR . mutateR f
+
+sig liftR : Reader c a b -o Reader d (c, a) (c, b)
+def liftR = localR swap -- = arr
 
 sig get : (c # p -> c # q -> Bool) -> Reader c a (c, a)
 def get eq = assocr . mapFst (copy eq)
@@ -159,15 +175,12 @@ def fromReader eqC r c x = let c' <- new eqC c in apR r c' x
 sig toReader : (c -> rev x -o rev y) -o Reader c x y
 def toReader f (rev (c, x)) = pin c (\c' -> f c' x)
 
-sig apC : Reader a () b -o rev a -o rev (a, b)
-def apC f = f . inv unitr
-
 -- sig goSubs : Reader Int (List Int) (List Int)
 -- def goSubs = proc l -> do
 --   case l of
 --   | rev Nil -> returnA -< rev Nil with null
 --   | rev (Cons x xs) -> do
---     rev (x, r) <- withCtx goSubs -< rev (x, xs)
+--     rev (x, r) <- liftR goSubs -< rev (x, xs)
 --     x' <- sub -< x
 --     returnA -< rev Cons x' r
 --   end
@@ -177,7 +190,7 @@ def goSubs =
   arr uncons >>>
   arrCase null
     (arr (\(rev ()) -> rev Nil))
-    (withCtx goSubs >>>
+    (liftR goSubs >>>
       first sub >>>
         arr (\(rev (x, r)) -> rev Cons x r))
 
@@ -209,7 +222,7 @@ def piR (rev L)       = rev (rev Nil, rev Nil) with null . fst
 --     with \(h1, (_, Cons h2 _)) -> eqInt h1 h2
 --   | rev (N a l r) -> do
 --     rev prir          <- piAccSR -< rev (r, pyiy)
---     rev (a, (pl, il)) <- withCtx piAccSR -< rev (a, rev (l, prir))
+--     rev (a, (pl, il)) <- liftR piAccSR -< rev (a, rev (l, prir))
 --     get eqInt -< rev (rev Cons a pl, il)
 --   end
 --     >>> assert eqInt
@@ -221,7 +234,7 @@ def piAccSR =
     (arr unitl >>> get eqInt >>>
      arr (\(rev (h, (py, iy))) -> rev (py, rev Cons h iy)) >>> get eqInt)
     (arr assocr >>> second piAccSR >>>
-     arr assocr >>> withCtx piAccSR >>>
+     arr assocr >>> liftR piAccSR >>>
      arr (\(rev (a, (pl, il))) -> rev (rev Cons a pl, il)) >>> get eqInt) >>>
   assert eqInt
 
@@ -271,10 +284,10 @@ def unbit (rev Cons Z l) = rev Left  l with isLeft
 --   | rev Br l r ->
 --     case ys of
 --     | rev (Cons Z ys') -> do
---       rev (l, res) <- withCtx decR -< rev (l, ys')
+--       rev (l, res) <- liftR decR -< rev (l, ys')
 --       returnA -< rev (rev Br l r, res) with (\(Br l r, (s,_)) -> member s l)
 --     | rev (Cons O ys') -> do
---       rev (r, res) <- withCtx decR -< rev (r, ys')
+--       rev (r, res) <- liftR decR -< rev (r, ys')
 --       returnA -< rev (rev Br l r, res)
 --     end
 --   end
@@ -287,9 +300,9 @@ def decR =
     (get eqHuff)
     (arr swap >>> first (arr unbit) >>> arr distr >>>
      arrCase (\(Br l r, (s,_)) -> member s l)
-       (arr swap >>> first (arr swap) >>> arr assocr >>> second (withCtx decR) >>>
+       (arr swap >>> first (arr swap) >>> arr assocr >>> second (liftR decR) >>>
         arr assocl >>> first (arr (\(rev (r, l)) -> rev Br l r)))
-       (arr swap >>> arr assocr >>> second (withCtx decR) >>>
+       (arr swap >>> arr assocr >>> second (liftR decR) >>>
         arr assocl >>> first (arr (\(rev (l, r)) -> rev Br l r)))) >>>
   assert eqHuff
 
@@ -413,13 +426,13 @@ def lz77 input =
 --     rev (pair, (h, t)) <- maxMatch -< rev (h, t)
 --     case pair of
 --     | rev Nothing ->
---       rev (oneH, lzRest) <- localCtx updateWindow goLz77 -< rev (rev (new eqInt 1, rev Cons h rev Nil), t)
+--       rev (oneH, lzRest) <- localR updateWindow goLz77 -< rev (rev (new eqInt 1, rev Cons h rev Nil), t)
 --       let rev (Cons h Nil) <- inv (pairl (new eqInt 1)) oneH in
 --       returnA -< rev Cons (rev Lit h) lzRest
 --       with isLit . head
 --     | rev Just (d, l) ->
---       rev (l, (match, rest))   <- withCtx split -< rev (l, rev Cons h t)
---       rev ((l, match), lzRest) <- localCtx updateWindow goLz77 -< rev (rev (l, match), rest)
+--       rev (l, (match, rest))   <- liftR split -< rev (l, rev Cons h t)
+--       rev ((l, match), lzRest) <- localR updateWindow goLz77 -< rev (rev (l, match), rest)
 --       p                        <- deleteMatch -< rev (rev (d, l), match)
 --       returnA -< rev Cons (rev Pair p) lzRest
 --     end
@@ -434,10 +447,10 @@ def goLz77 =
      arrCase (isLit . head)
       (arr unitl >>> first (arr (\h -> rev Cons h rev Nil)) >>>
        arr (assocl . pairl (new eqInt 1)) >>>
-       localCtx updateWindow goLz77 >>> arr (inv (pairl (new eqInt 1)) . assocr) >>>
+       localR updateWindow goLz77 >>> arr (inv (pairl (new eqInt 1)) . assocr) >>>
        arr (\(rev (Cons h Nil, lzRest)) -> rev Cons (rev Lit h) lzRest))
       (second (arr (\(rev (h, t)) -> rev Cons h t)) >>> arr assocr >>>
-       second (withCtx split >>> arr assocl >>> localCtx updateWindow goLz77) >>>
+       second (liftR split >>> arr assocl >>> localR updateWindow goLz77) >>>
        arr assocl >>> first (arr assocl >>> deleteMatch) >>>
        arr (\(rev (p, lzRest)) -> rev Cons (rev Pair p) lzRest)))
 
@@ -445,7 +458,7 @@ sig updateWindow : rev (List Symbol, (Int, List Symbol)) -o rev (List Symbol, (I
 def updateWindow (rev (window, (len, match))) =
   let wl <- new eqInt winLength in
   let rev (len, (winit, wlast)) <-
-    revPin (inv swap . sub . swap . pairl wl) split rev (len, window) in
+    mutateR (inv swap . sub . swap . pairl wl) split rev (len, window) in
   let rev (len, newWin) <- concat rev (len, rev (reverse match, winit)) in
   rev (newWin, rev (len, wlast))
 
@@ -503,9 +516,8 @@ sig revBool : Bool -o rev Bool
 def revBool True  = rev True
           | False = rev False
 
-sig eqIntC : Reader (Int, Int) () Bool
-def eqIntC = f . unitr
-  where def f p = pin p (\(x, y) -> revBool (eqInt x y)) end
+sig eqIntC : CFun (Int, Int) Bool
+def eqIntC p = pin p (\(x, y) -> revBool (eqInt x y))
 
 sig reverse : rev (List Symbol) -o rev (List Symbol)
 def reverse l =
@@ -513,7 +525,7 @@ def reverse l =
   let rev (Nil, l') <- goReverse len l in l'
   where
     def goReverse n l =
-      let rev (n, eq0) <- apC (transformCtx (pairl (new eqInt 0)) eqIntC) n in
+      let rev (n, eq0) <- conjC (pairl (new eqInt 0)) eqIntC n in
       case eq0 of
       | rev True  ->
         let rev () <- del eqInt 0 n in
