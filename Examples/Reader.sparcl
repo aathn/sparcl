@@ -185,6 +185,16 @@ def toReader f (rev (c, x)) = pin c (\c' -> f c' x)
 --     returnA -< rev Cons x' r
 --   end
 
+-- sig goSubs : Reader Int (List Int) (List Int)
+-- def goSubs = *\l ->
+--   case l of
+--   | rev Nil -> [rev Nil] with null
+--   | rev (Cons x xs) ->
+--     *let rev (x, r) <- liftR goSubs * [rev (x, xs)] in
+--     *let rev x' <- sub * [x] in
+--     [rev Cons x' r]
+--   end
+
 sig goSubs : Reader Int (List Int) (List Int)
 def goSubs =
   arr uncons >>>
