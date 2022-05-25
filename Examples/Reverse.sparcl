@@ -88,5 +88,62 @@ def revHO = go (\z -> revWork z (rev Nil)) null
 def testRevHOf = fwd revHO exampleList
 def testRevHOb = bwd revHO testRevHOf -- must be equal to exampleList 
 
+data RList a = RList (List (rev a) -o rev (List a)) (Un (List a -> Bool))
 
+sig rlToList : RList a -o rev (List a)
+def rlToList (RList f (U _)) = f Nil
 
+sig rlCons : rev a -o RList a -o RList a
+def rlCons a (RList f (U p)) = RList (f . Cons a) (U (p . tail))
+
+sig rlNil : RList a
+def rlNil = RList (\xs -> go xs (rev Nil)) (U null)
+  where
+    def go xs r = case xs of
+        | Nil       -> r
+        | Cons a xs -> go xs (rev Cons a r)
+        end
+  end
+
+sig rlGetP : RList a -o (RList a, Un (List a -> Bool))
+def rlGetP (RList f (U p)) = (RList f (U p), U p)
+
+-- reverse, with higher-order functions, reformulated
+def revHO' = go rlNil
+    where
+      sig go : RList a -o rev (List a) -o rev (List a)
+      def go l z = let (l, U p) <- rlGetP l in
+          case z of
+          | rev Nil      -> rlToList l with p
+          | rev Cons a x -> go (rlCons a l) x
+          end
+    end
+
+def drop n Nil        = Nil
+       | n (Cons h t) =
+         case eqInt 0 n of
+         | True -> Cons h t
+         | False -> drop (n - 1) t
+         end
+
+-- reverse, with higher-order functions, but without the higher-order functions
+def revHOWHO = go 0 (rev Nil)
+    where
+      sig go : Int -> rev (List a) -o rev (List a) -o rev (List a)
+      def go n l z =
+          case z of
+          | rev Nil      -> l with null . drop n
+          | rev Cons a x -> go (n + 1) (rev Cons a l) x
+          end
+    end
+
+-- def revReader l = apR go (new eqInt 0) rev (rev Nil, l)
+--     where
+--       sig go : Reader Int (List a, List a) (List a)
+--       def go = proc (rev (l, z)) ->
+--           case z of
+--           | rev Nil      -> get -< l with \(n, l) -> null . drop n $ l
+--           | rev Cons a x -> conjR plus1 (rev Cons a l) x >>> get
+--           end
+--             >>> assert
+--     end
