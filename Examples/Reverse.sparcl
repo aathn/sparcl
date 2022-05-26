@@ -142,8 +142,8 @@ def revHOWHO = go 0 (rev Nil)
 --       sig go : Reader Int (List a, List a) (List a)
 --       def go = proc (rev (l, z)) ->
 --           case z of
---           | rev Nil      -> get -< l with \(n, l) -> null . drop n $ l
---           | rev Cons a x -> conjR plus1 (rev Cons a l) x >>> get
+--           | rev Nil      -> returnA -< l with liftPR $ \(n, l) -> null . drop n $ l
+--           | rev Cons h t -> localR plus1 go -< rev (rev Cons h l, t)
 --           end
---             >>> assert
+--       def plus1 = apR add (new eqInt 1)
 --     end

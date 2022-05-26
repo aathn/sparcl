@@ -16,6 +16,9 @@ def snd (_, x) = x
 sig inv : (rev a -o rev b) -> rev b -o rev a
 def inv f = let (x, y) <- unlift f in lift y x
 
+sig conj : (rev a -o rev b) -> (rev b -o rev b) -o rev a -o rev a
+def conj f g = inv f . g . f
+
 sig fwd : (rev a -o rev b) -> a -> b
 def fwd = fst . unlift
 
@@ -67,9 +70,9 @@ sig isLeft : Either a b -> Bool
 def isLeft (Left _) = True
          | _        = False
 
-sig joinBranch : rev (Either (a, Bool) (a, Bool)) -o rev (a, Bool)
-def joinBranch (rev Left  (a, True))  = rev (a, rev True) with snd
-             | (rev Right (a, False)) = rev (a, rev False)
+sig eitherToBool : rev (Either a a) -o rev (a, Bool)
+def eitherToBool (rev Left  a) = rev (a, rev True) with snd
+               | (rev Right a) = rev (a, rev False)
 
 sig mirror : rev (Either a b) -o rev (Either b a)
 def mirror (rev Right a) = rev Left a with isLeft
@@ -126,7 +129,7 @@ def (+++) ra rb = left ra >>> right rb
 sig arrCase :
   Reader d c (c, Bool) -> Reader d a c -> Reader d b c -> Reader d (Either a b) c
 def arrCase rbranch ra rb =
-  ((ra >>> rbranch) +++ (rb >>> rbranch)) >>> arr joinBranch >>> arrInv rbranch
+  (ra +++ rb) >>> arr eitherToBool >>> arrInv rbranch
 
 sig caseR : Reader c1 a b -> Reader c2 a b -> Reader (Either c1 c2) a b
 def caseR r1 r2 (rev (Left c1, a)) =
@@ -158,29 +161,29 @@ def liftPR p = assocr . liftP' p
 sig localC : (rev a -o rev a') -> CFun a' b -o CFun a b
 def localC f cf = inv (mapFst f) . cf . f
 
-sig extendC : CFun a b -o CFun (a, a') b
-def extendC cf = assocl . mapSnd swap . assocr . mapFst cf
+sig extendC : CFun a b -o CFun (a', a) b
+def extendC cf = assocl . mapSnd cf
 
-sig mutateC : (rev a -o rev (a', h)) -> CFun a' b -o CFun a b
+sig mutateC : (rev a -o rev (h, a')) -> CFun a' b -o CFun a b
 def mutateC f = localC f . extendC
 
 sig localR : (rev s -o rev s') -> Reader s' a b -o Reader s a b
 def localR f r (rev (s, a)) = localC f (\s -> r rev (s, a)) s
 
-sig extendR : Reader s a b -o Reader (s, s') a b
+sig extendR : Reader s a b -o Reader (s', s) a b
 def extendR r (rev (ss', a)) = extendC (\s -> r rev (s, a)) ss'
 
-sig mutateR : (rev s -o rev (s', h)) -> Reader s' a b -o Reader s a b
+sig mutateR : (rev s -o rev (h, s')) -> Reader s' a b -o Reader s a b
 def mutateR f = localR f . extendR
 
 sig shrinkR : Reader (s, s') a b -o Reader s (s', a) (s', b)
 def shrinkR r = assocr . r . assocl
 
-sig pinR : (rev (s, a) -o rev (s', h)) -> Reader s' b c -o Reader s (a, b) (a, c)
+sig pinR : (rev (s, a) -o rev (h, s')) -> Reader s' b c -o Reader s (a, b) (a, c)
 def pinR f = shrinkR . mutateR f
 
 sig liftR : Reader c a b -o Reader d (c, a) (c, b)
-def liftR = pinR swap -- = arr
+def liftR = pinR id -- = arr = shrinkR . extendR
 
 sig ask : (c # p -> c # q -> Bool) -> Reader c a (c, a)
 def ask eq = assocr . mapFst (copy eq)
@@ -227,7 +230,10 @@ sig subs : rev (List Int) -o rev (List Int)
 def subs xs = apR goSubs (new eqInt 0) xs
 
 sig sub : Reader Int Int Int
-def sub = lift (\(m, n) -> (m, n - m)) (\(m, n) -> (m, n + m))
+def sub = arrInv add
+
+sig add : Reader Int Int Int
+def add = lift (\(m, n) -> (m, n + m)) (\(m, n) -> (m, n - m))
 
 sig uncons : rev (List a) -o rev (Either () (a, List a))
 def uncons (rev Nil)         = rev Left  rev () with isLeft
@@ -306,10 +312,10 @@ def unbit (rev Cons Z l) = rev Left  l with isLeft
 --   | Br _ _ ->
 --     case ys of
 --     | rev (Cons Z ys') -> do
---       res <- mutateR id decR -< ys'
+--       res <- mutateR swap decR -< ys'
 --       returnA -< res with liftPR $ \((l, _), (s, _)) -> member s l
 --     | rev (Cons O ys') -> do
---       res <- mutateR swap decR -< ys'
+--       res <- mutateR id decR -< ys'
 --       returnA -< res
 --     end
 --   end
@@ -321,8 +327,8 @@ def decR =
       (ask eqChar)
       (arr unbit >>>
        arrCase (liftPR $ \((l, _), (s,_)) -> member s l)
-         (mutateR id   decR)
-         (mutateR swap decR))
+         (mutateR swap decR)
+         (mutateR id   decR))
 
 sig encR : Reader Huff (Symbol, List Bit) (List Bit)
 def encR = arrInv decR
@@ -382,6 +388,13 @@ def tail (Cons _ t) = t
 sig length : List a -> Int
 def length Nil        = 0
          | (Cons _ t) = 1 + length t
+
+sig lengthR : Reader (List a) () Int
+def lengthR =
+  localR uncons $
+    caseR
+      (arr (\(rev ()) -> new eqInt 0))
+      (mutateR id lengthR >>> arr (apR add (new eqInt 1)))
 
 sig repeatTake : Int -> List a -> List a
 def repeatTake n l = goRepeatTake n l l
@@ -472,13 +485,13 @@ def goLz77 =
        arr assocl >>> first (arr assocl >>> deleteMatch) >>>
        arr (\(rev (p, lzRest)) -> rev Cons (rev Pair p) lzRest)))
 
-sig updateWindow : rev (List Symbol, (Int, List Symbol)) -o rev (List Symbol, (Int, List Symbol))
+sig updateWindow : rev (List Symbol, (Int, List Symbol)) -o rev ((Int, List Symbol), List Symbol)
 def updateWindow (rev (window, (len, match))) =
   let wl <- new eqInt winLength in
   let rev (len, (winit, wlast)) <-
-    mutateR (inv swap . sub . swap . pairl wl) split rev (len, window) in
+    mutateR (sub . pairr wl) split rev (len, window) in
   let rev (len, newWin) <- concat rev (len, rev (reverse match, winit)) in
-  rev (newWin, rev (len, wlast))
+  rev (rev (len, wlast), newWin)
 
 sig maxMatch : Reader (List Symbol) (Symbol, List Symbol) (Maybe (Int, Int), (Symbol, List Symbol))
 def maxMatch wi =
@@ -534,22 +547,18 @@ sig eqIntC : CFun (Int, Int) Bool
 def eqIntC = liftP' (\(x, y) -> eqInt x y)
 
 sig reverse : rev (List Symbol) -o rev (List Symbol)
-def reverse l =
-  let rev (l, len)  <- pin l (new eqInt . length) in
-  let rev (Nil, l') <- goReverse len l in l'
+def reverse =
+  conj getLen (goReverse >>> arr (\(rev (Nil, l)) -> l))
   where
-    def goReverse n l =
-      let rev (n, eq0) <- localC (pairl (new eqInt 0)) eqIntC n in
-      case eq0 of
-      | rev True  ->
-        let rev () <- del eqInt 0 n in
-        rev (l, rev Nil) with null . snd
-      | rev False ->
-        let n' <- apR sub (new eqInt 1) n in
-        case goReverse n' l of
-        | rev (Cons h t, l') -> rev (t, rev Cons h l')
-        end
-      end
+    def getLen = swap . lengthR . inv unitr
+    def goReverse =
+      localR (inv eitherToBool . eq0) $
+        caseR
+          (arr (pairr (rev Nil)))
+          (localR minus1 goReverse >>>
+           arr (\(rev (Cons h t, l)) -> rev (t, rev Cons h l)))
+    def eq0 = localC (pairl (new eqInt 0)) eqIntC
+    def minus1 = apR sub (new eqInt 1)
   end
 
 sig deleteMatch : Reader (List Symbol) ((Int, Int), List Symbol) (Int, Int)
