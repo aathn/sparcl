@@ -31,6 +31,9 @@ def new eq c =
        (\c' -> let True <- eq c c' in ())
        (rev ())
 
+sig del : (a # p -> a # q -> Bool) -> a -> rev a -o rev ()
+def del eq c = inv (\(rev ()) -> new eq c)
+
 sig copy : (a # p -> a # q -> Bool) -> rev a -o rev (a, a)
 def copy eqA a = pin a (new eqA)
 
@@ -82,6 +85,17 @@ sig distr : rev (Either a b, c) -o rev (Either (a, c) (b, c))
 def distr (rev (Left  a, c)) = rev Left  rev (a, c) with isLeft
         | (rev (Right b, c)) = rev Right rev (b, c)
 
+sig mapEither
+  : (rev a -o rev c) -> (rev b -o rev d) -> rev (Either a b) -o rev (Either c d)
+def mapEither f g (rev Left a)  = rev Left  (f a) with isLeft
+            | f g (rev Right b) = rev Right (g b)
+
+sig mapLeft  : (rev a -o rev b) -> rev (Either a c) -o rev (Either b c)
+def mapLeft  f = mapEither f id
+
+sig mapRight : (rev a -o rev b) -> rev (Either c a) -o rev (Either c b)
+def mapRight f = mapEither id f
+
 data List a = Cons a (List a) | Nil
 
 sig null : List a -> Bool
@@ -132,11 +146,7 @@ def arrCase rbranch ra rb =
   (ra +++ rb) >>> arr eitherToBool >>> arrInv rbranch
 
 sig caseR : Reader c1 a b -> Reader c2 a b -> Reader (Either c1 c2) a b
-def caseR r1 r2 (rev (Left c1, a)) =
-          let rev (c1, b) <- r1 rev (c1, a) in rev (rev Left c1, b)
-          with isLeft . fst
-        | r1 r2 (rev (Right c2, a)) =
-          let rev (c2, b) <- r2 rev (c2, a) in rev (rev Right c2, b)
+def caseR r1 r2 = inv distr . mapEither r1 r2 . distr
 
 -- type HFun a b = exist h g. rev (h, a) -o rev (g, b)
 
@@ -197,6 +207,22 @@ def fromReader eqC r c x = let c' <- new eqC c in apR r c' x
 sig toReader : (c -> rev x -o rev y) -o Reader c x y
 def toReader f (rev (c, x)) = pin c (\c' -> f c' x)
 
+sig add : Reader Int Int Int
+def add = lift (\(m, n) -> (m, n + m)) (\(m, n) -> (m, n - m))
+
+sig sub : Reader Int Int Int
+def sub = arrInv add
+
+sig succ : rev Int -o rev Int
+def succ = apR add (new eqInt 1)
+
+sig is0 : rev Int -o rev (Either () Int)
+def is0 =
+  mapLeft (del eqInt 0) . inv eitherToBool . localC (pairl (new eqInt 0)) eqIntC
+
+sig eqIntC : CFun (Int, Int) Bool
+def eqIntC = liftP' (\(x, y) -> eqInt x y)
+
 -- sig goSubs : Reader Int (List Int) (List Int)
 -- def goSubs = proc l -> do
 --   case l of
@@ -227,13 +253,7 @@ def goSubs =
         arr (\(rev (x, r)) -> rev Cons x r))
 
 sig subs : rev (List Int) -o rev (List Int)
-def subs xs = apR goSubs (new eqInt 0) xs
-
-sig sub : Reader Int Int Int
-def sub = arrInv add
-
-sig add : Reader Int Int Int
-def add = lift (\(m, n) -> (m, n + m)) (\(m, n) -> (m, n - m))
+def subs = apR goSubs (new eqInt 0)
 
 sig uncons : rev (List a) -o rev (Either () (a, List a))
 def uncons (rev Nil)         = rev Left  rev () with isLeft
@@ -359,9 +379,6 @@ sig huffCompress : rev (List Symbol) -o rev (Huff, List Bit)
 def huffCompress = encode . swap . makeHuff
 
 
-sig del : (a # p -> a # q -> Bool) -> a -> rev a -o rev ()
-def del eq c = inv (\(rev ()) -> new eq c)
-
 sig and : Bool -> Bool -> Bool
 def and True True = True
       | _    _    = False
@@ -394,7 +411,7 @@ def lengthR =
   localR uncons $
     caseR
       (arr (\(rev ()) -> new eqInt 0))
-      (mutateR id lengthR >>> arr (apR add (new eqInt 1)))
+      (mutateR id lengthR >>> arr succ)
 
 sig repeatTake : Int -> List a -> List a
 def repeatTake n l = goRepeatTake n l l
@@ -543,22 +560,18 @@ def split (rev (len, list)) = pin len (\l' -> split' l' list)
 sig concat : Reader Int (List Symbol, List Symbol) (List Symbol)
 def concat = arrInv split
 
-sig eqIntC : CFun (Int, Int) Bool
-def eqIntC = liftP' (\(x, y) -> eqInt x y)
-
 sig reverse : rev (List Symbol) -o rev (List Symbol)
-def reverse =
-  conj getLen (goReverse >>> arr (\(rev (Nil, l)) -> l))
+def reverse l =
+  let rev (l, len)  <- lengthR rev (l, rev ()) in
+  let rev (Nil, l') <- goReverse len l in l'
   where
-    def getLen = swap . lengthR . inv unitr
-    def goReverse =
-      localR (inv eitherToBool . eq0) $
-        caseR
-          (arr (pairr (rev Nil)))
-          (localR minus1 goReverse >>>
-           arr (\(rev (Cons h t, l)) -> rev (t, rev Cons h l)))
-    def eq0 = localC (pairl (new eqInt 0)) eqIntC
-    def minus1 = apR sub (new eqInt 1)
+    def goReverse n l =
+      case is0 n of
+      | rev Left  () -> rev (l, rev Nil) with null . snd
+      | rev Right n  ->
+        let rev (Cons h t, l') <- goReverse (inv succ n) l in
+        rev (t, rev Cons h l')
+      end
   end
 
 sig deleteMatch : Reader (List Symbol) ((Int, Int), List Symbol) (Int, Int)
