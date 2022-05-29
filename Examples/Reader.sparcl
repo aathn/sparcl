@@ -166,35 +166,24 @@ def caseG (GF fa) (GF fb) = GF (inv distr . mapEither fa fb)
 sig erase : GFun a ()
 def erase = GF (inv unitr)
 
-type CFun a b = rev a -o rev (a, b)
-
 sig revBool : Bool -o rev Bool
 def revBool True  = rev True
           | False = rev False
 
-sig liftP' : (a -> Bool) -> CFun a Bool
+sig liftP' : (a # p -> Bool) -> rev a -o rev (a, Bool)
 def liftP' p a = pin a (revBool . p)
 
-sig liftP : (a -> Bool) -> Reader c a (a, Bool)
+sig liftP : (a # p -> Bool) -> Reader c a (a, Bool)
 def liftP = arr . liftP'
 
-sig liftPR : ((c, a) -> Bool) -> Reader c a (a, Bool)
+sig liftPR : ((c, a) # p -> Bool) -> Reader c a (a, Bool)
 def liftPR p = assocr . liftP' p
 
-sig localC : (rev a -o rev a') -> CFun a' b -o CFun a b
-def localC f cf = inv (mapFst f) . cf . f
-
-sig extendC : CFun a b -o CFun (g, a) b
-def extendC cf = assocl . mapSnd cf
-
-sig mutateC : GFun a a' -> CFun a' b -o CFun a b
-def mutateC (GF f) = localC f . extendC
-
 sig localR : (rev s -o rev s') -> Reader s' a b -o Reader s a b
-def localR f r (rev (s, a)) = localC f (\s -> r rev (s, a)) s
+def localR f r = mapFst (inv f) . r . mapFst f
 
 sig extendR : Reader s a b -o Reader (g, s) a b
-def extendR r (rev (gs, a)) = extendC (\s -> r rev (s, a)) gs
+def extendR r = assocl . mapSnd r . assocr
 
 sig mutateR : GFun s s' -> Reader s' a b -o Reader s a b
 def mutateR (GF f) = localR f . extendR
@@ -202,11 +191,14 @@ def mutateR (GF f) = localR f . extendR
 sig shrinkR : Reader (s, s') a b -o Reader s (s', a) (s', b)
 def shrinkR r = assocr . r . assocl
 
-sig pinR : GFun (s, a) s' -> Reader s' b c -o Reader s (a, b) (a, c)
-def pinR gf = shrinkR . mutateR gf
+sig updateR : GFun (s, a) s' -> Reader s' b c -o Reader s (a, b) (a, c)
+def updateR gf = shrinkR . mutateR gf
+
+sig pinR : Eq p q s' -> GFun (s, a) s' -> Reader s a (a, s')
+def pinR eqS' gf = arr (inv unitr) >>> updateR gf (ask eqS') >>> second (arr unitr)
 
 sig liftR : Reader c a b -o Reader d (c, a) (c, b)
-def liftR = pinR (GF id) -- = arr = shrinkR . extendR
+def liftR = shrinkR . extendR
 
 sig ask : Eq p q c -> Reader c a (c, a)
 def ask eq = assocr . mapFst (copy eq)
@@ -234,10 +226,7 @@ def pred = inv succ
 
 sig is0 : rev Int -o rev (Either () Int)
 def is0 =
-  mapLeft (del eqInt 0) . inv eitherToBool . localC (pairl (new eqInt 0)) eqIntC
-
-sig eqIntC : CFun (Int, Int) Bool
-def eqIntC = liftP' (\(x, y) -> eqInt x y)
+  mapLeft (del eqInt 0) . inv eitherToBool . liftP' (eqInt 0)
 
 -- sig goSubs : Reader Int (List Int) (List Int)
 -- def goSubs = proc l -> do
@@ -388,7 +377,7 @@ def encode =
 sig dummyHuff : Huff
 def dummyHuff = Br (Lf 'a') (Br (Lf 'b') (Br (Lf 'c') (Lf 'd')))
 
-sig makeHuff : CFun (List Symbol) Huff
+sig makeHuff : rev (List Symbol) -o rev (List Symbol, Huff)
 def makeHuff s = rev (s, new eqHuff dummyHuff)
 
 sig huffCompress : rev (List Symbol) -o rev (Huff, List Bit)
@@ -468,22 +457,16 @@ def lz77 input =
 --     rev (pair, (h, t)) <- maxMatch -< rev (h, t)
 --     case pair of
 --     | rev Nothing ->
---       rev (oneH, lzRest) <- pinR updateWindow goLz77 -< rev (rev (new eqInt 1, rev Cons h rev Nil), t)
+--       rev (oneH, lzRest) <- updateR updateWindow goLz77 -< rev (rev (new eqInt 1, rev Cons h rev Nil), t)
 --       let rev (Cons h Nil) <- inv (pairl (new eqInt 1)) oneH in
 --       returnA -< rev Cons (rev Lit h) lzRest
 --       with isLit . head
 --     | rev Just (d, l) ->
 --       rev (l, (match, rest))   <- liftR split -< rev (l, rev Cons h t)
---       rev ((l, match), lzRest) <- pinR updateWindow goLz77 -< rev (rev (l, match), rest)
---       p                        <- deleteMatch -< rev (rev (d, l), match)
+--       rev ((l, match), lzRest) <- updateR updateWindow goLz77 -< rev (rev (l, match), rest)
+--       p <- arrInv (pinR (eqList eqChar) getMatch) -< rev (rev (d, l), match)
 --       returnA -< rev Cons (rev Pair p) lzRest
 --     end
---   end
---   where
---     def deleteMatch =
---       arr (mapSnd $ inv unitr) >>>
---       arrInv (pinR getMatch (ask (eqList eqChar))) >>>
---       arr unitr
 --   end
 
 sig goLz77 : Reader (List Symbol) (List Symbol) (List LZPair)
@@ -495,18 +478,12 @@ def goLz77 =
      arrCase (liftP $ isLit . head)
       (arr unitl >>> first (arr (\h -> rev Cons h rev Nil)) >>>
        arr (assocl . pairl (new eqInt 1)) >>>
-       pinR updateWindow goLz77 >>> arr (inv (pairl (new eqInt 1)) . assocr) >>>
+       updateR updateWindow goLz77 >>> arr (inv (pairl (new eqInt 1)) . assocr) >>>
        arr (\(rev (Cons h Nil, lzRest)) -> rev Cons (rev Lit h) lzRest))
       (second (arr (\(rev (h, t)) -> rev Cons h t)) >>> arr assocr >>>
-       second (liftR split >>> arr assocl >>> pinR updateWindow goLz77) >>>
-       arr assocl >>> first (arr assocl >>> deleteMatch) >>>
+       second (liftR split >>> arr assocl >>> updateR updateWindow goLz77) >>>
+       arr assocl >>> first (arr assocl >>> arrInv (pinR (eqList eqChar) getMatch)) >>>
        arr (\(rev (p, lzRest)) -> rev Cons (rev Pair p) lzRest)))
-  where
-    def deleteMatch =
-      arr (mapSnd $ inv unitr) >>>
-      arrInv (pinR getMatch (ask (eqList eqChar))) >>>
-      arr unitr
-  end
 
 sig updateWindow : GFun (List Symbol, (Int, List Symbol)) (List Symbol)
 def updateWindow = GF $ \(rev (window, (len, match))) ->
