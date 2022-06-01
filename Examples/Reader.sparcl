@@ -169,6 +169,9 @@ def fstG = GF swap
 sig sndG : GFun (a, b) b
 def sndG = GF id
 
+sig suspendG : GFun a b -> GFun a b
+def suspendG f = GF (\x -> revPin (\_ _ -> True) f x)
+
 sig revBool : Bool -o rev Bool
 def revBool True  = rev True
           | False = rev False
@@ -424,9 +427,9 @@ def lengthG =
   caseG
     (arrG (\(rev ()) -> new eqInt 0))
     (sndG >>! lengthG' >>! arrG succ)
-  where def lengthG' = GF (\x -> let GF f <- lengthG in f x) end
+  where def lengthG' = suspendG lengthG end
 
-sig reverse : rev (List Symbol) -o rev (List Symbol)
+sig reverse : rev (List a) -o rev (List a)
 def reverse l =
   let rev (l, len)  <- revPin eqInt lengthG l in
   let rev (Nil, l') <- goReverse len l in l'
@@ -454,7 +457,7 @@ def reverse l =
 --       end
 --   end
 
-sig split : Reader Int (List Symbol) (List Symbol, List Symbol)
+sig split : Reader Int (List a) (List a, List a)
 def split =
   arr uncons >>>
   arrCase (liftP $ \(x, y) -> and (null x) (null y))
@@ -465,17 +468,17 @@ def split =
         (second (localR pred split) >>>
          arr (\(rev (h, (hs, ts))) -> rev (rev Cons h hs, ts))))
 
-sig take : GFun (Int, List Symbol) (List Symbol)
+sig take : GFun (Int, List a) (List a)
 def take = GF split >>! fstG
 
-sig append : GFun (List Symbol, List Symbol) (List Symbol)
+sig append : GFun (List a, List a) (List a)
 def append =
   arrG (distr . mapFst uncons) >>!
   caseG
     (arrG unitl)
     (arrG assocr >>! secondG append' >>!
      arrG (\(rev (h, rest)) -> rev Cons h rest))
-  where def append' = GF (\x -> let GF f <- append in f x) end
+  where def append' = suspendG append end
 
 data Maybe a = Nothing | Just a
 
@@ -630,5 +633,5 @@ def repeatTake = secondG (arrG $ copy (eqList eqChar)) >>! goRepeatTake
              secondG (firstG (arrG pred) >>! goRepeatTake') >>!
              arrG (\(rev (h, rest)) -> rev Cons h rest)))
 
-    def goRepeatTake' = GF (\x -> let GF f <- goRepeatTake in f x)
+    def goRepeatTake' = suspendG goRepeatTake
   end
