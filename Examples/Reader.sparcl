@@ -66,6 +66,12 @@ def assocr (rev ((a, b), c)) = rev (a, rev (b, c))
 sig assocl : rev (a, (b, c)) -o rev ((a, b), c)
 def assocl = inv assocr
 
+sig shuffler : rev (a, (b, c)) -o rev (b, (a, c))
+def shuffler = assocr . mapFst swap . assocl
+
+sig shufflel : rev ((a, b), c) -o rev ((a, c), b)
+def shufflel = assocl . mapSnd swap . assocr
+
 data Either a b = Left a | Right b
 
 sig isLeft : Either a b -> Bool
@@ -409,10 +415,6 @@ def eqPair eqA eqB (a1, b1) (a2, b2) =
 sig head : List a -> a
 def head (Cons h _) = h
 
-sig length : List a -> Int
-def length Nil        = 0
-         | (Cons _ t) = 1 + length t
-
 sig eqList : Eq p q a -> List a -> List a -> Bool
 def eqList eq Nil Nil = True
          | eq (Cons h1 t1) (Cons h2 t2) =
@@ -429,24 +431,24 @@ def replicate n x =
   | False -> Cons x (replicate (n-1) x)
   end
 
--- sig lengthG : GFun (List a) Int
--- def lengthG = proc l -> case l of
+-- sig length : GFun (List a) Int
+-- def length = proc l -> case l of
 --   | Nil -> returnA -< new eqInt 0
 --   | Cons h t ->
 --     rev () <- erase -< h
---     tlen <- lengthG -< t
+--     tlen <- length -< t
 --     returnA -< succ tlen
 
-sig lengthG : GFun (List a) Int
-def lengthG =
+sig length : GFun (List a) Int
+def length =
   arrG uncons >>!
   caseG
     (arrG (\(rev ()) -> new eqInt 0))
-    (sndG >>! suspendG lengthG >>! arrG succ)
+    (sndG >>! suspendG length >>! arrG succ)
 
 sig reverse : rev (List a) -o rev (List a)
 def reverse l =
-  let rev (l, len)  <- revPin eqInt lengthG l in
+  let rev (l, len)  <- revPin eqInt length l in
   let rev (Nil, l') <- goReverse len l in l'
   where
     def goReverse n l =
@@ -555,7 +557,7 @@ def goLz77 =
   arr uncons >>>
   arrCase (liftP null)
     (arr (\(rev ()) -> rev Nil))
-    (pinR eqMaybeIntPair maxMatch >>> arr swap >>> first (arr unmaybe) >>> arr distr >>>
+    (pinR eqMaybeIntPair maxMatch >>> arr (distr . mapFst unmaybe . swap) >>>
      arrCase (liftP $ isLit . head)
       (arr unitl >>> updateR updateWindow goLz77 >>>
        arr (\(rev (h, lzRest)) -> rev Cons (rev Lit h) lzRest))
@@ -583,7 +585,7 @@ def maxMatch =
   caseG
     (erase >>! arrG (\(rev ()) -> rev Nothing))
     (arrG (rev Just))
-
+  where
     -- def goMaxMatch = proc (rev (bestMatch, (matchBuf, (window, input)))) ->
     --   case window of
     --   | Nil ->
@@ -591,27 +593,25 @@ def maxMatch =
     --     returnA -< bestMatch
     --   | Cons h t ->
     --     let matchBuf <- rev Cons h matchBuf in
-    --     rev (matchBuf, matchBuf') <- copyG matchBuf in
-    --     rev (input, input') <- copyG input in
+    --     rev ((matchBuf, input), (matchBuf', input')) <- copyG -< rev (matchBuf, input) in
     --     newMatch <- updateMatch -< rev (bestMatch, rev (matchBuf', input'))
     --     goMaxMatch -< rev (newMatch, rev (matchBuf, rev (t, input)))
     --   end
     sig goMaxMatch : GFun ((Int, Int), (List Symbol, (List Symbol, List Symbol))) (Int, Int)
     def goMaxMatch =
-      arrG (distr . mapFst uncons . assocr . mapFst swap . assocl .
-            mapSnd (assocr . mapFst swap . assocl)) >>!
+      arrG (distr . mapFst uncons . shuffler . mapSnd shuffler) >>!
       caseG
         (arrG unitl >>! fstG)
         (arrG (assocl .
-               mapSnd (mapFst (mapFst (\(rev (h, mb)) -> rev Cons h mb) .
-                               assocl . swap) . assocl) . assocr . swap) >>!
+               mapSnd (shufflel . mapFst (mapFst (\(rev (wh, mb)) -> rev Cons wh mb) .
+                                          shufflel) . assocl) . shuffler) >>!
          firstG (secondG copyG >>! arrG assocl >>! firstG updateMatch) >>!
-         arrG (mapSnd assocr . assocr) >>! suspendG goMaxMatch)
+         arrG (mapSnd (shuffler . swap) . assocr) >>! suspendG goMaxMatch)
 
     -- def updateMatch = proc (rev ((d, l), (matchBuf, input))) -> do
-    --   rev (newDist, matchBuf) <- copyG >>! firstG lengthG -< matchBuf
+    --   rev (newDist, matchBuf) <- copyG >>! firstG length -< matchBuf
     --   newMatch <- measureMatch -< rev (matchBuf, input)
-    --   newLength <- lengthG -< newMatch
+    --   newLength <- length -< newMatch
     --   let rev ((l, newLength), lt) <- ltIntC rev (l, newLength) in
     --   case lt of
     --   | True -> do
@@ -621,23 +621,18 @@ def maxMatch =
     --     rev () <- erase -< rev (newLength, matchBuf)
     --     returnA -< rev (d, l)
     --   end
-
     sig updateMatch : GFun ((Int, Int), (List Symbol, List Symbol)) (Int, Int)
     def updateMatch =
-      -- ((newDist, (matchBuf, matchBuf)), input)
-      -- (((d, l), (newDist, newLength)), lt)
-      secondG (firstG (copyG >>! firstG lengthG) >>!
+      secondG (firstG (copyG >>! firstG length) >>!
                arrG assocr >>! secondG measureMatch) >>!
-      arrG (inv eitherToBool .
-            mapFst (assocl . mapSnd (assocr . mapFst swap . assocl)) . assocl .
-            mapSnd (assocl . mapSnd ltIntC . assocr . mapFst swap . assocl) .
-            assocr) >>!
+      arrG (inv eitherToBool . mapFst (assocl . mapSnd shuffler) . assocl .
+            mapSnd (assocl . mapSnd ltIntC . shuffler) . assocr) >>!
       caseG sndG fstG
 
     sig measureMatch : GFun (List Symbol, List Symbol) Int
     def measureMatch = firstG copyG >>! arrG assocr >>! goMeasureMatch
     def goMeasureMatch =
-      arrG (distr . mapFst uncons. assocr . mapFst swap . assocl) >>!
+      arrG (distr . mapFst uncons . shuffler) >>!
       caseG
         (arrG unitl >>! firstG copyG >>! arrG assocr >>! suspendG goMeasureMatch)
         (arrG (distr . mapFst uncons . swap . assocl) >>!
@@ -649,6 +644,7 @@ def maxMatch =
              caseG
                (arrG (swap . mapFst swap) >>! suspendG goMeasureMatch >>! arrG succ)
                (erase >>! arrG (\(rev ()) -> new eqInt 0))))
+  end
 
 -- sig getMatch : GFun (List Symbol, (Int, Int)) (List Symbol)
 -- def getMatch = proc (rev (window, (d, l))) ->
