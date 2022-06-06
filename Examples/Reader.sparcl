@@ -156,12 +156,26 @@ def arrG f = GF (inv unitl . f)
 
 sig (>>!) : GFun a b -o GFun b c -o GFun a c
 def (>>!) (GF fa) (GF fb) = GF (assocl . mapSnd fb . fa)
+fixity >>! 90 right
 
 sig firstG : GFun a b -o GFun (a, d) (b, d)
 def firstG (GF fa) = GF (assocr . mapFst fa)
 
 sig secondG : GFun a b -o GFun (d, a) (d, b)
-def secondG fa = arrG swap >>! firstG fa >>! arrG swap
+def secondG (GF fa) = GF (shuffler . mapSnd fa)
+
+sig leftG : GFun a b -> GFun (Either a c) (Either b c)
+def leftG (GF fa) = GF (swap . inv distr .
+                        mapEither
+                         (mapSnd rev Left  . swap . fa)
+                         (mapSnd rev Right . inv unitr))
+
+sig rightG : GFun a b -> GFun (Either c a) (Either c b)
+def rightG gf = arrG mirror >>! leftG gf >>! arrG mirror
+
+sig (++!) : GFun a c -> GFun b d -> GFun (Either a b) (Either c d)
+def (++!) fa fb = leftG fa >>! rightG fb
+fixity ++! 85 right
 
 sig caseG : GFun a c -> GFun b c -> GFun (Either a b) c
 def caseG (GF fa) (GF fb) = GF (inv distr . mapEither fa fb)
@@ -178,8 +192,19 @@ def sndG = GF id
 sig copyG : GFun a (a, a)
 def copyG = arrG (copy (\_ _ -> True))
 
-sig suspendG : GFun a b -> GFun a b
-def suspendG f = GF (\x -> revPin (\_ _ -> True) f x)
+sig traceG : GFun a (Either b a) -> GFun a b
+def traceG (GF f) = GF (goTrace f)
+  where
+    def goTrace f x =
+      case f x of
+      | rev (g, Left x) ->
+        rev (rev (new eqInt 0, rev Cons g rev Nil), x)
+        with eqInt 0 . fst . fst
+      | rev (g, Right y) ->
+        let rev ((n, gs), x) <- goTrace f y in
+        rev (rev (succ n, rev Cons g gs), x)
+      end
+  end
 
 sig revBool : Bool -o rev Bool
 def revBool True  = rev True
@@ -311,7 +336,7 @@ def piR (rev L)       = rev (rev Nil, rev Nil) with null . fst
 
 sig piAccSR : Reader Int (Tree, (List Int, List Int)) (List Int, List Int)
 def piAccSR =
-  first (arr untree) >>> arr distr >>>
+  arr (distr . mapFst untree) >>>
   arrCase (liftPR $ \(h1, (_, Cons h2 _)) -> eqInt h1 h2)
     (arr unitl >>> ask eqInt >>>
      arr (\(rev (h, (py, iy))) -> rev (py, rev Cons h iy)))
@@ -432,34 +457,27 @@ def replicate n x =
   end
 
 -- sig length : GFun (List a) Int
--- def length = proc l -> case l of
---   | Nil -> returnA -< new eqInt 0
---   | Cons h t ->
---     rev () <- erase -< h
---     tlen <- length -< t
---     returnA -< succ tlen
+-- def length = proc l -> traceG lenStep -< rev (l, new eqInt 0)
+--   where
+--     def lenStep = proc (rev (l, n)) ->
+--       case l of
+--       | Nil      -> returnA -< rev Left n
+--       | Cons h t -> do
+--         rev () <- erase -< h
+--         returnA -< rev (t, succ n)
+--       end
+--   end
 
 sig length : GFun (List a) Int
-def length =
-  arrG uncons >>!
-  caseG
-    (arrG (\(rev ()) -> new eqInt 0))
-    (sndG >>! suspendG length >>! arrG succ)
-
-sig reverse : rev (List a) -o rev (List a)
-def reverse l =
-  let rev (l, len)  <- revPin eqInt length l in
-  let rev (Nil, l') <- goReverse len l in l'
+def length = arrG (pairr (new eqInt 0)) >>! traceG lenStep
   where
-    def goReverse n l =
-      case is0 n of
-      | rev Left  () -> rev (l, rev Nil) with null . snd
-      | rev Right n  ->
-        let rev (Cons h t, l') <- goReverse (pred n) l in
-        rev (t, rev Cons h l')
-      end
+    def lenStep =
+      arrG (distr . mapFst uncons) >>!
+        ((arrG unitl) ++!
+         (firstG sndG >>! arrG (mapSnd succ)))
   end
 
+-- sig split : Reader Int (List a) (List a, List a)
 -- def split = proc l -> case l of
 --   | rev Nil      ->
 --     returnA -< rev (rev Nil, rev Nil)
@@ -488,13 +506,14 @@ def split =
 sig take : GFun (Int, List a) (List a)
 def take = GF split >>! fstG
 
-sig append : GFun (List a, List a) (List a)
-def append =
-  arrG (distr . mapFst uncons) >>!
-  caseG
-    (arrG unitl)
-    (arrG assocr >>! secondG (suspendG append) >>!
-     arrG (\(rev (h, rest)) -> rev Cons h rest))
+sig revApp : GFun (List a, List a) (List a)
+def revApp = traceG step
+  where
+    def step =
+      arrG (distr . mapFst uncons) >>!
+      (arrG unitl ++! arrG (mapSnd (\(rev (h, rest)) -> rev Cons h rest) .
+                           assocr . mapFst swap))
+  end
 
 data Maybe a = Nothing | Just a
 
@@ -518,7 +537,7 @@ def isLit (Lit _) = True
         | _       = False
 
 sig winLength : Int
-def winLength = 2048
+def winLength = 32
 
 sig lz77 : rev (List Symbol) -o rev (List LZPair)
 def lz77 input =
@@ -548,7 +567,7 @@ def lz77 input =
 --      take -< rev (new eqInt winLength, rev Cons h w)
 --
 --    def updateWindow' = proc (rev (w, m)) ->
---      w' <- append -< rev (reverse m, w)
+--      w' <- revApp -< rev (m, w)
 --      take -< rev (new eqInt winLength, w')
 --  end
 
@@ -561,7 +580,7 @@ def goLz77 =
      arrCase (liftP $ isLit . head)
       (arr unitl >>> updateR updateWindow goLz77 >>>
        arr (\(rev (h, lzRest)) -> rev Cons (rev Lit h) lzRest))
-      (second (arr (\(rev (h, t)) -> rev Cons h t)) >>> arr assocr >>>
+      (arr (assocr . mapSnd (\(rev (h, t)) -> rev Cons h t)) >>>
        second (liftR split >>> second (updateR updateWindow' goLz77)) >>>
        arr (assocl . assocl) >>> first (arrInv (pinR (eqList eqChar) getMatch)) >>>
        arr (\(rev (p, lzRest)) -> rev Cons (rev Pair p) lzRest)))
@@ -573,54 +592,28 @@ def goLz77 =
       arrG (pairl (new eqInt winLength)) >>! take
 
     def updateWindow' =
-      arrG swap >>! firstG (arrG reverse) >>! append >>!
+      arrG swap >>! revApp >>!
       arrG (pairl (new eqInt winLength)) >>! take
   end
 
 sig maxMatch : GFun (List Symbol, (Symbol, List Symbol)) (Maybe (Int, Int))
 def maxMatch =
-  secondG (arrG (\(rev (h, t)) -> rev Cons h t)) >>!
+  arrG (mapSnd (\(rev (h, t)) -> rev Cons h t)) >>!
   arrG (pairl (rev (new eqInt 0, new eqInt 0)) . pairl (rev Nil)) >>!
-  goMaxMatch >>! firstG (arrG is0) >>! arrG distr >>!
+  traceG goMaxMatch >>! arrG (distr . mapFst is0) >>!
   caseG
     (erase >>! arrG (\(rev ()) -> rev Nothing))
     (arrG (rev Just))
   where
-    -- def goMaxMatch = proc (rev (bestMatch, (matchBuf, (window, input)))) ->
-    --   case window of
-    --   | Nil ->
-    --     rev () <- erase -< rev (matchBuf, input)
-    --     returnA -< bestMatch
-    --   | Cons h t ->
-    --     let matchBuf <- rev Cons h matchBuf in
-    --     rev ((matchBuf, input), (matchBuf', input')) <- copyG -< rev (matchBuf, input) in
-    --     newMatch <- updateMatch -< rev (bestMatch, rev (matchBuf', input'))
-    --     goMaxMatch -< rev (newMatch, rev (matchBuf, rev (t, input)))
-    --   end
-    sig goMaxMatch : GFun ((Int, Int), (List Symbol, (List Symbol, List Symbol))) (Int, Int)
     def goMaxMatch =
       arrG (distr . mapFst uncons . shuffler . mapSnd shuffler) >>!
-      caseG
-        (arrG unitl >>! fstG)
-        (arrG (assocl .
-               mapSnd (shufflel . mapFst (mapFst (\(rev (wh, mb)) -> rev Cons wh mb) .
-                                          shufflel) . assocl) . shuffler) >>!
-         firstG (secondG copyG >>! arrG assocl >>! firstG updateMatch) >>!
-         arrG (mapSnd (shuffler . swap) . assocr) >>! suspendG goMaxMatch)
+      (arrG unitl >>! fstG ++!
+       arrG (assocl .
+             mapSnd (shufflel . mapFst (mapFst (\(rev (wh, mb)) -> rev Cons wh mb) .
+                                        shufflel) . assocl) . shuffler) >>!
+       firstG (secondG copyG >>! arrG assocl >>! firstG updateMatch) >>!
+       arrG (mapSnd (shuffler . swap) . assocr))
 
-    -- def updateMatch = proc (rev ((d, l), (matchBuf, input))) -> do
-    --   rev (newDist, matchBuf) <- copyG >>! firstG length -< matchBuf
-    --   newMatch <- measureMatch -< rev (matchBuf, input)
-    --   newLength <- length -< newMatch
-    --   let rev ((l, newLength), lt) <- ltIntC rev (l, newLength) in
-    --   case lt of
-    --   | True -> do
-    --     rev () <- erase -< rev (d, l)
-    --     returnA -< rev (newDist, newLength)
-    --   | False -> do
-    --     rev () <- erase -< rev (newLength, matchBuf)
-    --     returnA -< rev (d, l)
-    --   end
     sig updateMatch : GFun ((Int, Int), (List Symbol, List Symbol)) (Int, Int)
     def updateMatch =
       secondG (firstG (copyG >>! firstG length) >>!
@@ -630,59 +623,51 @@ def maxMatch =
       caseG sndG fstG
 
     sig measureMatch : GFun (List Symbol, List Symbol) Int
-    def measureMatch = firstG copyG >>! arrG assocr >>! goMeasureMatch
+    def measureMatch =
+      firstG copyG >>! arrG (mapSnd (assocr . pairr (new eqInt 0)) . assocr) >>!
+      traceG goMeasureMatch
     def goMeasureMatch =
-      arrG (distr . mapFst uncons . shuffler) >>!
+      arrG (distr . mapFst uncons) >>!
       caseG
-        (arrG unitl >>! firstG copyG >>! arrG assocr >>! suspendG goMeasureMatch)
-        (arrG (distr . mapFst uncons . swap . assocl) >>!
+        (arrG unitl >>! firstG copyG >>! arrG (rev Right . assocr))
+        (arrG (distr . mapFst uncons . shuffler . mapSnd shuffler) >>!
           caseG
-            (erase >>! arrG (\(rev ()) -> new eqInt 0))
-            (arrG (mapFst eqCharC . assocr .
+            (arrG unitl >>! sndG >>! sndG >>! arrG rev Left)
+            (arrG (mapPair eqCharC assocr . assocr .
                    mapFst (assocr . mapFst (assocl . swap) . assocl) . assocl) >>!
              firstG sndG >>! arrG (inv eitherToBool . swap) >>!
              caseG
-               (arrG (swap . mapFst swap) >>! suspendG goMeasureMatch >>! arrG succ)
-               (erase >>! arrG (\(rev ()) -> new eqInt 0))))
+               (arrG (rev Right . mapSnd (mapSnd (mapSnd succ) . shuffler) . shuffler))
+               (sndG >>! sndG >>! sndG >>! arrG rev Left)))
   end
-
--- sig getMatch : GFun (List Symbol, (Int, Int)) (List Symbol)
--- def getMatch = proc (rev (window, (d, l))) ->
---   matchBuf <- take -< rev (d, window)
---   repeatTake -< rev (l, reverse matchBuf)
 
 sig getMatch : GFun (List Symbol, (Int, Int)) (List Symbol)
 def getMatch =
-  arrG (mapFst swap . assocl) >>! firstG (take >>! arrG reverse) >>!
+  arrG (mapFst swap . assocl) >>! firstG revTake >>!
   arrG swap >>! repeatTake
-
--- sig repeatTake : GFun (Int, List a) (List a)
--- def repeatTake = proc (rev (n, l)) -> ll <- copyG -< l; goRepeatTake -< rev (n, ll)
---   where
---     def goRepeatTake = proc (rev (n, (l1, l2))) -> case l2 of
---       | Nil      -> ll <- copyG -< l1; goRepeatTake -< rev (n, ll)
---       | Cons h t -> case is0 n of
---         | Left  () ->
---           rev () <- erase -< rev (l1, (h, t))
---           returnA -< rev Nil
---         | Right n  -> do
---           rest <- goRepeatTake -< rev (pred n, rev (l1, t))
---           returnA -< rev Cons h rest
---         end
---       end
---   end
-
-sig repeatTake : GFun (Int, List a) (List a)
-def repeatTake = secondG copyG >>! goRepeatTake
   where
-    def goRepeatTake =
-      arrG (swap . assocl) >>! firstG (arrG uncons) >>! arrG distr >>!
+    sig revTake : GFun (Int, List a) (List a)
+    def revTake = arrG (assocr . pairr (rev Nil)) >>! traceG goRevTake
+    def goRevTake =
+      arrG (distr . mapFst is0) >>!
       caseG
-        (arrG unitl >>! secondG copyG >>! suspendG goRepeatTake)
-        (arrG (distr . mapFst is0 . assocr . swap) >>!
-          caseG
-            (erase >>! arrG (\(rev ()) -> rev Nil))
-            (arrG (swap . assocl . mapSnd (assocl . mapSnd swap)) >>!
-             secondG (firstG (arrG pred) >>! suspendG goRepeatTake) >>!
-             arrG (\(rev (h, rest)) -> rev Cons h rest)))
+        (arrG unitl >>! sndG >>! arrG rev Left)
+        (arrG (distr . mapFst uncons . shuffler) >>!
+         (arrG unitl >>! sndG ++!
+          arrG (mapPair pred (\(rev ((h, t), l)) -> rev (t, rev Cons h l)) . shuffler)))
+
+    sig repeatTake : GFun (Int, List a) (List a)
+    def repeatTake =
+      secondG (copyG >>! arrG (assocr . pairr (rev Nil))) >>!
+      traceG goRepeatTake >>! reverse
+    def goRepeatTake =
+      arrG (distr . mapFst is0) >>!
+      (arrG unitl >>! sndG >>! sndG ++!
+       arrG (distr . mapFst uncons . shuffler) >>!
+       caseG
+        (arrG unitl >>! secondG (firstG copyG >>! arrG assocr))
+        (arrG (mapPair pred
+                (shuffler . mapSnd (\(rev ((h, t), l)) -> rev (t, rev Cons h l)) .
+                  shuffler) . shuffler)))
+    def reverse = arrG (pairr (rev Nil)) >>! revApp
   end
