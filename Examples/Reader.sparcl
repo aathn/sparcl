@@ -197,14 +197,29 @@ def traceG (GF f) = GF (goTrace f)
   where
     def goTrace f x =
       case f x of
-      | rev (g, Left x) ->
-        rev (rev (new eqInt 0, rev Cons g rev Nil), x)
-        with eqInt 0 . fst . fst
-      | rev (g, Right y) ->
-        let rev ((n, gs), x) <- goTrace f y in
-        rev (rev (succ n, rev Cons g gs), x)
+      | rev (g, Left y) -> rev (rev Cons g rev Nil, y) with isSingle . fst
+      | rev (g, Right x') ->
+        let rev (gs, y) <- goTrace f x' in
+        rev (rev Cons g gs, y)
       end
+
+    def isSingle (Cons a Nil) = True
+               | _            = False
   end
+
+-- sig traceC : CFun a (Either b a) -> CFun a b
+-- def traceC f = go f >>% sndC
+--   where
+--     sig go : CFun a (Either b a) -> CFun a (List a, b)
+--     def go f x =
+--       case f x of
+--       | rev (x, Left  y) ->
+--         rev (x, (rev Nil, y)) with null . fst . snd
+--       | rev (x, Right x') ->
+--         let rev (x', (xs, y)) <- go f x' in
+--         rev (x, rev (rev Cons x' xs, y))
+--       end
+--   end
 
 sig revBool : Bool -o rev Bool
 def revBool True  = rev True
