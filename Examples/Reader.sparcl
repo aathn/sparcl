@@ -123,8 +123,8 @@ def first ra (rev (c, (a, d))) =
 sig second : Reader c a b -o Reader c (d, a) (d, b)
 def second ra = arr swap >>> first ra >>> arr swap
 
-sig arrInv : Reader c a b -> Reader c b a
-def arrInv = inv
+sig invA : Reader c a b -> Reader c b a
+def invA = inv
 
 sig left : Reader c a b -> Reader c (Either a d) (Either b d)
 def left ra (rev (c, Left a)) =
@@ -139,10 +139,10 @@ def right ra = arr mirror >>> left ra >>> arr mirror
 sig (+++) : Reader e a c -> Reader e b d -> Reader e (Either a b) (Either c d)
 def (+++) ra rb = left ra >>> right rb
 
-sig arrCase :
+sig caseA :
   Reader d c (c, Bool) -> Reader d a c -> Reader d b c -> Reader d (Either a b) c
-def arrCase rbranch ra rb =
-  (ra +++ rb) >>> arr eitherToBool >>> arrInv rbranch
+def caseA rbranch ra rb =
+  (ra +++ rb) >>> arr eitherToBool >>> invA rbranch
 
 sig caseR : Reader c1 a b -> Reader c2 a b -> Reader (Either c1 c2) a b
 def caseR r1 r2 = inv distr . mapEither r1 r2 . distr
@@ -234,9 +234,6 @@ def liftP = arr . liftP'
 sig liftPR : ((c, a) # p -> Bool) -> Reader c a (a, Bool)
 def liftPR p = assocr . liftP' p
 
-sig revPin : Eq p q b -> GFun a b -> rev a -o rev (a, b)
-def revPin eqB (GF f) = mapFst (inv f) . assocl . mapSnd (copy eqB) . f
-
 sig localR : (rev s -o rev s') -> Reader s' a b -o Reader s a b
 def localR f r = mapFst (inv f) . r . mapFst f
 
@@ -252,16 +249,18 @@ def shrinkR r = assocr . r . assocl
 sig updateR : GFun (s, a) s' -> Reader s' b c -o Reader s (a, b) (a, c)
 def updateR gf = shrinkR . mutateR gf
 
+sig revPin : Eq p q s' -> GFun s s' -> Reader s () s'
+def revPin eq f = mutateR f (ask eq)
+
 sig pinR : Eq p q s' -> GFun (s, a) s' -> Reader s a (a, s')
-def pinR eqS' gf = assocr . revPin eqS' gf
-  -- = arr (inv unitr) >>> updateR gf (ask eqS') >>> second (arr unitr)
+def pinR eqS' gf = arr (inv unitr) >>> shrinkR (revPin eqS' gf)
 
 sig liftR : Reader c a b -o Reader d (c, a) (c, b)
 def liftR = shrinkR . extendR
   -- = arr = updateR sndG
 
-sig ask : Eq p q c -> Reader c a (c, a)
-def ask eq = assocr . mapFst (copy eq)
+sig ask : Eq p q c -> Reader c () c
+def ask eq = copy eq . unitr
 
 sig apR : Reader c x y -o rev c -> rev x -o rev y
 def apR r c = inv (pairl c) . r . pairl c
@@ -276,7 +275,7 @@ sig add : Reader Int Int Int
 def add = lift (\(m, n) -> (m, n + m)) (\(m, n) -> (m, n - m))
 
 sig sub : Reader Int Int Int
-def sub = arrInv add
+def sub = invA add
 
 sig succ : rev Int -o rev Int
 def succ = apR add (new eqInt 1)
@@ -315,7 +314,7 @@ def eqCharC = liftP' (\(x, y) -> eqChar x y)
 sig goSubs : Reader Int (List Int) (List Int)
 def goSubs =
   arr uncons >>>
-  arrCase (liftP null)
+  caseA (liftP null)
     (arr (\(rev ()) -> rev Nil))
     (liftR goSubs >>>
       first sub >>>
@@ -352,8 +351,8 @@ def piR (rev L)       = rev (rev Nil, rev Nil) with null . fst
 sig piAccSR : Reader Int (Tree, (List Int, List Int)) (List Int, List Int)
 def piAccSR =
   arr (distr . mapFst untree) >>>
-  arrCase (liftPR $ \(h1, (_, Cons h2 _)) -> eqInt h1 h2)
-    (arr unitl >>> ask eqInt >>>
+  caseA (liftPR $ \(h1, (_, Cons h2 _)) -> eqInt h1 h2)
+    (first (ask eqInt) >>>
      arr (\(rev (h, (py, iy))) -> rev (py, rev Cons h iy)))
     (arr assocr >>> second piAccSR >>>
      arr assocr >>> liftR piAccSR >>>
@@ -407,14 +406,14 @@ sig decR : Reader Huff (List Bit) (Symbol, List Bit)
 def decR =
   localR unhuff $
     caseR
-      (ask eqChar)
+      (arr (inv unitl) >>> first (ask eqChar))
       (arr unbit >>>
-       arrCase (liftPR $ \((l, _), (s, _)) -> member s l)
+       caseA (liftPR $ \((l, _), (s, _)) -> member s l)
          (mutateR fstG decR)
          (mutateR sndG decR))
 
 sig encR : Reader Huff (Symbol, List Bit) (List Bit)
-def encR = arrInv decR
+def encR = invA decR
 
 -- sig encode : Reader Huff (List Symbol) (List Bit)
 -- def encode = proc l -> case l of
@@ -427,7 +426,7 @@ def encR = arrInv decR
 sig encode : Reader Huff (List Symbol) (List Bit)
 def encode =
   arr uncons >>>
-  arrCase (liftP null)
+  caseA (liftP null)
     (arr (\(rev ()) -> rev Nil))
     (second encode >>> encR)
 
@@ -496,7 +495,7 @@ def length = arrG (pairr (new eqInt 0)) >>! traceG lenStep
 -- def split = proc l -> case l of
 --   | rev Nil      ->
 --     returnA -< rev (rev Nil, rev Nil)
---     with \(x, y) -> and (null x) (null y)
+--     with liftP $ \(x, y) -> and (null x) (null y)
 --   | rev Cons h t ->
 --     localR is0 $
 --       caseR of
@@ -510,7 +509,7 @@ def length = arrG (pairr (new eqInt 0)) >>! traceG lenStep
 sig split : Reader Int (List a) (List a, List a)
 def split =
   arr uncons >>>
-  arrCase (liftP $ \(x, y) -> and (null x) (null y))
+  caseA (liftP $ \(x, y) -> and (null x) (null y))
     (arr (\(rev ()) -> rev (rev Nil, rev Nil)))
     (localR is0 $
       caseR
@@ -560,44 +559,44 @@ def lz77 input =
 
 -- sig goLz77 : Reader (List Symbol) (List Symbol) (List LZPair)
 -- def goLz77 = proc l -> case l of
---   | rev Nil      -> rev Nil with null
+--   | rev Nil      -> returnA -< rev Nil with liftP null
 --   | rev Cons h t ->
 --     rev ((h, t), pair) <- pinR eqMaybeIntPair maxMatch -< rev (h, t)
 --     case pair of
 --     | rev Nothing ->
 --       rev (h, lzRest) <- updateR updateWindow goLz77 -< rev (h, t)
 --       returnA -< rev Cons (rev Lit h) lzRest
---       with isLit . head
+--       with liftP $ isLit . head
 --     | rev Just (d, l) ->
 --       rev (l, (match, rest)) <- liftR split -< rev (l, rev Cons h t)
 --       rev (match, lzRest)    <- updateR updateWindow' goLz77 -< rev (match, rest)
---       p <- arrInv (pinR (eqList eqChar) getMatch) -< rev (rev (d, l), match)
+--       p <- invA (pinR (eqList eqChar) getMatch) -< rev (rev (d, l), match)
 --       returnA -< rev Cons (rev Pair p) lzRest
 --     end
 --   end
---  where
---    def eqMaybeIntPair = eqMaybe (eqPair eqInt eqInt)
+--   where
+--     def eqMaybeIntPair = eqMaybe (eqPair eqInt eqInt)
 --
---    def updateWindow = proc (rev (w, h)) ->
---      take -< rev (new eqInt winLength, rev Cons h w)
+--     def updateWindow = proc (rev (w, h)) ->
+--       take -< rev (new eqInt winLength, rev Cons h w)
 --
---    def updateWindow' = proc (rev (w, m)) ->
---      w' <- revApp -< rev (m, w)
---      take -< rev (new eqInt winLength, w')
---  end
+--     def updateWindow' = proc (rev (w, m)) ->
+--       w' <- revApp -< rev (m, w)
+--       take -< rev (new eqInt winLength, w')
+--   end
 
 sig goLz77 : Reader (List Symbol) (List Symbol) (List LZPair)
 def goLz77 =
   arr uncons >>>
-  arrCase (liftP null)
+  caseA (liftP null)
     (arr (\(rev ()) -> rev Nil))
     (pinR eqMaybeIntPair maxMatch >>> arr (distr . mapFst unmaybe . swap) >>>
-     arrCase (liftP $ isLit . head)
+     caseA (liftP $ isLit . head)
       (arr unitl >>> updateR updateWindow goLz77 >>>
        arr (\(rev (h, lzRest)) -> rev Cons (rev Lit h) lzRest))
       (arr (assocr . mapSnd (\(rev (h, t)) -> rev Cons h t)) >>>
        second (liftR split >>> second (updateR updateWindow' goLz77)) >>>
-       arr (assocl . assocl) >>> first (arrInv (pinR (eqList eqChar) getMatch)) >>>
+       arr (assocl . assocl) >>> first (invA (pinR (eqList eqChar) getMatch)) >>>
        arr (\(rev (p, lzRest)) -> rev Cons (rev Pair p) lzRest)))
   where
     def eqMaybeIntPair = eqMaybe (eqPair eqInt eqInt)
