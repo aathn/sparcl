@@ -126,7 +126,7 @@ def drop n Nil        = Nil
          | False -> drop (n - 1) t
          end
 
--- reverse, with higher-order functions, but without the higher-order functions
+-- reverse with higher order functions, ad-hoc defunctionalized
 def revHOWHO = go 0 (rev Nil)
     where
       sig go : Int -> rev (List a) -o rev (List a) -o rev (List a)
@@ -147,3 +147,67 @@ def revHOWHO = go 0 (rev Nil)
 --           end
 --       def plus1 = apR add (new eqInt 1)
 --     end
+
+data NullPred a =
+    Null
+  | Tail (NullPred a)
+
+data FunList a =
+    FNil
+  | FCons (FunList a) (rev a)
+
+sig evalNP : (NullPred a, List a) -> Bool
+def evalNP (Null, l)    = null l
+         | (Tail np, l) = evalNP (np, tail l)
+
+sig evalFL : (FunList a, List (rev a)) -o rev (List a)
+def evalFL (FNil, z)       = revWorkDF z (rev Nil)
+         | (FCons fl a, r) = evalFL (fl, Cons a r)
+
+-- reverse with higher-order functions, systematically defunctionalized
+def revHODF = goDF FNil Null
+
+sig goDF : FunList a -o NullPred a -> rev (List a) -o rev (List a)
+def goDF f p z = case z of
+  | rev Nil      -> evalFL (f, Nil) with \x -> evalNP (p, x)
+  | rev Cons a x -> goDF (FCons f a) (Tail p) x
+  end
+
+def revWorkDF xs r = case xs of
+  | Nil       -> r
+  | Cons a xs -> revWorkDF xs (rev Cons a r)
+  end
+
+-- data RNullPred a =
+--     Null
+--   | Tail (NullPred a)
+
+-- data RFunList a =
+--     FNil
+--   | FCons (FunList a) (rev a)
+
+-- sig evalRNP : GFun (RNullPred a, List a) Bool
+-- def evalRNP = *\(rev (np, l)) -> case np of
+--   | Null    -> nullG * l
+--   | Tail np -> let* t <- tailG * l in evalRNP * rev (np, t)
+--   end
+
+-- sig evalRFL : GFun (FunList a, List a) (List a)
+-- def evalRFL = *\(rev (fl, l)) -> case fl of
+--   | rev FNil -> revWorkRDF * rev (l, rev Nil)
+--   | rev (FCons fl a) = evalRFL * rev (fl, rev Cons a l)
+--   end
+
+-- -- reverse with higher-order functions, systematically and reversibly defunctionalized
+-- def revHODF = apR goRDF rev (rev FNil, rev Null)
+
+-- sig goRDF : Reader (RFunList a, RNullPred a) (List a) (List a)
+-- def goRDF f p z = case z of
+--   | rev Nil      -> evalRFL (f, Nil) with \x -> evalRNP (p, x)
+--   | rev Cons a x -> goRDF (rev FCons f a) (rev Tail p) x
+--   end
+
+-- def revWorkRDF = *\(xs, r) -> case xs of
+--   | Nil       -> erase * xs; r
+--   | Cons a xs -> revWorkRDF (xs, rev Cons a r)
+--   end
