@@ -107,16 +107,7 @@ tuplePat = mkTuplePat <$>
   parens (pat `P.sepBy` comma)
 
 pat :: Monad m => P m (LPat 'Parsing)
-pat = do
-  s <- getSrcLoc
-  m <- P.optional (keyword "rev")
-  p <- appPat
-  case m of
-    Just _  -> return $ Loc (s <> location p) $ PREV p
-    Nothing -> return p
-
-appPat :: Monad m => P m (LPat 'Parsing)
-appPat =
+pat =
   P.try (loc $ do
             c <- qconName
             sp
@@ -417,9 +408,11 @@ fixityDecl = do
 opExpr :: Monad m => P m (LExp 'Parsing)
 opExpr =
   foldl (\a f -> f a)  <$>
-       funExpr <*> P.many ((\o e2 e1 -> lop o e1 e2) <$> (qop <* sp) <*> funExpr)
+       funExpr <*> P.many ((rapp <|> lop) <*> funExpr)
   where
-    lop o e1 e2 = Loc (location e1 <> location e2) $ Op o e1 e2
+    rapp = void percent >> sp >> return (locFun RApp)
+    lop = (locFun . Op) <$> qop <* sp
+    locFun f e2 e1 = Loc (location e1 <> location e2) $ f e1 e2
 
 
 funExpr :: Monad m => P m (LExp 'Parsing)
@@ -452,11 +445,13 @@ funExpr = getSrcLoc >>= \startLoc ->
       endLoc <- getSrcLoc
       return $ Loc (startLoc <> endLoc) $ Case e0 alts)
   <|>
-  (do void $ keyword "revdo"
-      as <- assignment `P.endBy` semicolon
+  (do void $ keyword "do*"
+      p <- pat
+      void leftArrow
+      e1 <- expr
       void $ keyword "in"
-      e <- expr
-      return $ Loc (startLoc <> location e) $ RDO as e)
+      e2 <- expr
+      return $ Loc (startLoc <> location e2) $ RDo p e1 e2)
   <|>
   appExpr
 
@@ -471,10 +466,7 @@ lapp e1 e2 = Loc (location e1 <> location e2) $ App e1 e2
 simpleExpr :: Monad m => SrcSpan -> P m (LExp 'Parsing)
 simpleExpr startLoc =
   literal
-  <|> pinExpr
   <|> liftExpr
-  <|> unliftExpr
-  <|> P.try rconExpr
   <|> conExpr
   <|> varExpr
   <|> tupleExpr
@@ -488,39 +480,20 @@ simpleExpr startLoc =
       sp
       return $ Loc (startLoc <> endLoc) t
 
-    pinExpr = do
-      void $ keyword "pin"
-      withEnd RPin
-
     liftExpr = do
       void $ keyword "lift"
       withEnd Lift
 
-    unliftExpr = do
-      void $ keyword "unlift"
-      withEnd Unlift
-
     conExpr = do
       c <- qconName
       withEndSp $ Con c
-
-    rconExpr = do
-      void $ keyword "rev"
-      c <- qconName
-      withEndSp $ RCon c
 
     varExpr = do
       x <- qvarOpName
       withEndSp $ Var x
 
 tupleExpr :: Monad m => P m (LExp 'Parsing)
-tupleExpr = do
-  p  <- P.optional (keyword "rev")
-  es <- parens (expr `P.sepBy` comma)
-  case p of
-    Just _  -> pure $ mkTupleExpR es
-    Nothing -> pure $ mkTupleExp  es
-
+tupleExpr = mkTupleExp <$> parens (expr `P.sepBy` comma)
 
 
 mkTuplePat :: [Loc (Pat 'Parsing)] -> Loc (Pat 'Parsing)
@@ -533,11 +506,6 @@ mkTupleExp :: [Loc (Exp 'Parsing)] -> Loc (Exp 'Parsing)
 mkTupleExp [e] = Loc (location e) $ Parens e
 mkTupleExp es =
   foldl lapp (noLoc $ Con $ BuiltIn $ nameTuple (length es)) es
-
-mkTupleExpR :: [Loc (Exp 'Parsing)] -> Loc (Exp 'Parsing)
-mkTupleExpR [e] = Loc (location e) $ Parens e
-mkTupleExpR es =
-  foldl lapp (noLoc $ RCon $ BuiltIn $ nameTuple (length es)) es
 
 
 literal :: Monad m => P m (LExp 'Parsing)

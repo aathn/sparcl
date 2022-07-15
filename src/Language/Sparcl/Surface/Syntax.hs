@@ -159,27 +159,17 @@ type family XId (p :: Pass) = q | q -> p where
 
 class QueryName p where
   checkTuple :: XId p -> Maybe Int
-  isRev      :: XId p -> Bool
 
 instance QueryName 'Parsing where
   checkTuple (BuiltIn n) = checkTuple n
   checkTuple _           = Nothing
 
-  isRev (BuiltIn n) = isRev n
-  isRev _           = False
-
-
 instance QueryName 'Renaming where
   checkTuple (Original _ (System (NTuple n)) _) = Just n
   checkTuple _                                  = Nothing
 
-  isRev (Original _ (System NRev) _) = True
-  isRev _                            = False
-
 instance QueryName 'TypeCheck where
   checkTuple (n, _) = checkTuple n
-
-  isRev (n, _) = isRev n
 
 
 type ForallX (f :: Type -> Constraint) p = (f (XId p), f (XTId p))
@@ -196,17 +186,13 @@ data Exp p
   | Lift
   | Sig  !(LExp p) !(LTy p)
   | Let  !(Decls p (LDecl p)) !(LExp p)
-  | Let1 !(LPat p) !(LExp p)  !(LExp p) -- let p = e1 in e2 is equivalent to (\p . e2) e1
+  | Let1 !(LPat p) !(LExp p)  !(LExp p)
 
   | Parens !(LExp p) -- for operators
   | Op  !(XId p) !(LExp p) !(LExp p)
 
-  | RDO ![(LPat p, LExp p)] !(LExp p)
-
-  | Unlift
-
-  | RCon !(XId p)
-  | RPin
+  | RApp !(LExp p) !(LExp p)
+  | RDo !(LPat p) !(LExp p) !(LExp p)
 
 
 instance AllPretty p => Pretty (LExp p) where
@@ -231,7 +217,6 @@ instance AllPretty p => Pretty (Exp p) where
                      D.align (pprPrec 1 p D.<+> D.text "->" D.<+> D.nest 2 (ppr c))
 
   pprPrec _ Lift   = text "lift"
-  pprPrec _ Unlift = text "unlift"
 
   pprPrec _ (Parens e) = D.parens (pprPrec 0 e)
   pprPrec k (Op q e1 e2) = parensIf (k > 8) $
@@ -253,25 +238,18 @@ instance AllPretty p => Pretty (Exp p) where
     D.text "let" D.<+> D.align (ppr p <+> text "<-" <+> ppr e1 <+> D.text "in") D.</>
     pprPrec 0 e2
 
-  pprPrec _ (RCon c) = ppr c
+  pprPrec k (RApp e1 e2) = parensIf (k > 9) $
+    pprPrec 9 e1 D.<+> D.text "%" D.<+> pprPrec 10 e2
 
-
-  pprPrec k (RDO as r) = parensIf (k > 0) $
-    D.text "revdo" <+>
-    D.align (D.vcat (map (\(x, e) -> ppr x <+> text "<-" <+> ppr e) as)
-               <> D.line <> text "before" <+> ppr r)
-
-
-  pprPrec _ RPin = text "pin"
-  -- pprPrec k (RPin e1 e2) = parensIf (k > 9) $
-  --   D.text "pin" D.<+> pprPrec 10 e1 D.<+> pprPrec 10 e2
+  pprPrec k (RDo p e1 e2) = parensIf (k > 0) $ D.align $
+    D.text "do*" D.<+> D.align (ppr p <+> text "<-" <+> ppr e1 <+> D.text "in") D.</>
+    pprPrec 0 e2
 
 
 
 type LPat p = Loc (Pat p)
 data Pat p = PVar !(XId p)
            | PCon !(XId p) ![LPat p]
-           | PREV  !(LPat p)
            | PWild !(XPWild p) -- PWild x will be treated as !x after renaming
          -- TODO: Add literal pattern
 --   deriving Show
@@ -294,8 +272,6 @@ instance AllPretty p => Pretty (Pat p) where
   pprPrec _ (PCon c []) = ppr c
   pprPrec k (PCon c ps) = parensIf (k > 0) $
     ppr c D.<+> D.hsep (map (pprPrec 1) ps)
-  pprPrec k (PREV p) = parensIf (k > 0) $
-    D.text "rev" D.<+> pprPrec 1 p
 
   pprPrec _ (PWild _) = D.text "_"
 

@@ -102,22 +102,12 @@ desugarExp (Loc _ expr) = go expr
       e2' <- desugarExp e2
       return $ C.App (C.App (C.Var op) e1') e2'
 
-    go S.Unlift =
-      withNewName $ \x ->
-      return $ C.Abs x (C.Unlift (C.Var x))
+    go (S.RApp e1 e2)  =
+      C.RApp <$> desugarExp e1 <*> desugarExp e2
 
-    go S.RPin =
-      withNewName $ \x -> withNewName $ \y ->
-      return $ C.Abs x $ C.Abs y $ C.RPin (C.Var x) (C.Var y)
-
-    go (S.RCon (c, ty)) = do
-      ty' <- zonkType ty
-      let n = numberOfArgs ty'
-      withNewNames n $ \xs -> do
-        let b = C.RCon c [ C.Var x | x <- xs ]
-        return $ foldr C.Abs b xs
-
-    go (S.RDO as er) = go (unLoc $ desugarRDO as er)
+    go (S.RDo p1 e1 e2) = withNewName $ \n -> do
+      r <- desugarAlts [(p1, S.Clause (noLoc e2) (S.HDecls () []) Nothing)]
+      return $ C.RDo n e1 (makeCase (C.Var n) r)
 
 
 

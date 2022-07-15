@@ -32,11 +32,10 @@ data Exp n
   | Case !(Exp n) ![ (Pat n, Exp n) ]
   | Let  !(Bind n) !(Exp n)
   | Lift !(Exp n) !(Exp n)
-  | Unlift !(Exp n)
 
-  | RCon !n ![Exp n]
+  | RApp !(Exp n) !(Exp n)
+  | RDo  !n !(Exp n) !(Exp n)
   | RCase !(Exp n) ![ (Pat n, Exp n, Exp n ) ]
-  | RPin  !(Exp n) !(Exp n)
 
 
 freeVars :: Ord n => Exp n -> [n]
@@ -57,11 +56,11 @@ freeVars = Set.toList . ($ Set.empty) . go Set.empty
       Let  bs e   -> let bound' = foldr (Set.insert . fst3) bound bs
                      in gather (go bound' . thd3) bs . go bound' e
       Lift e1 e2  -> go bound e1 . go bound e2
-      Unlift e    -> go bound e
 
-      RCon _ es -> gather (go bound) es
+      RApp e1 e2   -> go bound e1 . go bound e2
       RCase e alts -> go bound e . gather (goRAlt bound) alts
-      RPin e1 e2 -> go bound e1 . go bound e2
+      RDo n e1 e2  -> let bound' = Set.insert n bound in
+                        go bound' e1 . go bound' e2
 
     goRAlt bound (p, e, e') =
       go bound e' . go (foldr Set.insert bound $ freeVarsP p) e
@@ -109,12 +108,12 @@ instance Pretty n => Pretty (Exp n) where
      D.text "let" D.<+> D.align (D.semiBraces $ map (\(n,_,ne) -> ppr n <+> text "=" <+> ppr ne) ds) D.</>
      D.text "in" D.<+> pprPrec 0 e
 
-  pprPrec k (Unlift e) = parensIf (k > 9) $
-    D.text "unlift" D.<+> D.align (pprPrec 10 e)
+  pprPrec k (RApp e1 e2) = parensIf (k > 9) $
+    pprPrec 9 e1 D.<+> D.text "%" D.<+> pprPrec 10 e2
 
-  pprPrec k (RCon c es) = parensIf (k > 9) $
-    D.text "rev" D.<+> ppr c D.<+>
-     D.hsep (map (pprPrec 10) es)
+  pprPrec k (RDo n e1 e2) = parensIf (k > 0) $
+    D.text "do*" D.<+> D.align (ppr n <+> text "<-" <+> ppr e1 <+> text "in") D.</>
+    pprPrec 0 e2
 
   pprPrec k (RCase e0 ps) = parensIf (k > 0) $ D.group $ D.align $
     D.text "case" D.<+> pprPrec 0 e0 D.<+> D.text "of" D.<$>
@@ -122,10 +121,8 @@ instance Pretty n => Pretty (Exp n) where
     D.text "end"
     where
       pprPs (p, c, e) =
-        D.text "|" D.<+> D.align (D.text "rev" D.<+> pprPrec 1 p D.<+> D.text "->" D.<+> D.nest 2 (ppr c D.</> D.text "with" D.<+> D.align (ppr e)))
+        D.text "|" D.<+> D.align (pprPrec 1 p D.<+> D.text "->" D.<+> D.nest 2 (ppr c D.</> D.text "with" D.<+> D.align (ppr e)))
 
-  pprPrec k (RPin e1 e2) = parensIf (k > 9) $
-    D.text "pin" D.<+> pprPrec 10 e1 D.<+> pprPrec 10 e2
 
 
 data Pat n = PVar !n

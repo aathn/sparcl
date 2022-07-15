@@ -177,31 +177,17 @@ renameExp level localnames (Loc loc expr) = first (Loc loc) <$> go expr
       return (unLoc e', S.insert n' fv)
 
 
-    go (RCon c) = do
-      e' <- RCon <$> resolveImportedName loc c
-      return (e', S.empty)
+    go (RApp e1 e2) = do
+      (e1', fv1) <- renameExp level localnames e1
+      (e2', fv2) <- renameExp level localnames e2
+      return (RApp e1' e2', S.union fv1 fv2)
 
-    go Unlift = return (Unlift, S.empty)
-
-    go RPin = return (RPin, S.empty)
-
-
-    go (RDO as er) = do
-      (as', er', fvs) <- goAs level localnames as er
-      return (RDO as' er', fvs)
-
-    goAs :: DBLevel -> LocalNames -> [(LPat 'Parsing, LExp 'Parsing)] -> LExp 'Parsing
-            -> Renaming ([(LPat 'Renaming, LExp 'Renaming)] , LExp 'Renaming, FreeVars)
-    goAs lv lns [] er = do
-      (er', fvs) <- renameExp lv lns er
-      return ([], er', fvs)
-    goAs lv lns ((p,e):as) er = do
-      (e', fvs1) <- renameExp lv lns e
-      renamePat lv lns S.empty p $ \p' lv' lns' bvs' -> do
-        (as', er', fvs2) <- goAs lv' lns' as er
-        return ((p',e'):as', er', S.union fvs1 (fvs2 `S.difference` bvs'))
-
-
+    go (RDo p e1 e2) = do
+      (e1', fv1) <- renameExp level localnames e1
+      (p', e2', fv2) <- renamePat level localnames S.empty p $ \p' level' localnames' bvP -> do
+        (e' , fv) <- renameExp level' localnames' e2
+        return (p', e', fv S.\\ bvP)
+      return (RDo p' e1' e2', fv1 `S.union` fv2)
 
 
 
@@ -273,8 +259,6 @@ rearrangeOp loc level localnames op exp1 exp2 = do
 renameAlt :: DBLevel -> LocalNames -> (LPat 'Parsing, Clause 'Parsing)
              -> Renaming ((LPat 'Renaming, Clause 'Renaming), FreeVars)
 renameAlt level localnames (p, c) = do
-  when (not (hasRev $ unLoc p) && hasWith c) $
-    throwError (location p, text "Unidirectional patterns cannot have `with'-clause")
   renamePat level localnames S.empty p $ \p' level' localnames' bvP -> do
     (c', fv) <- renameClause level' localnames' c
     return ((p', c'), fv S.\\ bvP)
@@ -327,8 +311,6 @@ renameLocalDeclsWork level' localnames currnames (Decls _ decls) cont = do
 
     let Just n' = M.lookup n currnames -- must succeed
     (pcs', fvs) <- fmap unzip $ forM pcs $ \(ps, c) -> do
-      when (all (not . hasRev . unLoc) ps && hasWith c) $
-        throwError (loc, text "Unidirectional patterns cannot have `with'-clause")
       renamePats level' localnames' S.empty ps $ \ps' level'' localnames'' fvP -> do
         (c', fvc) <- renameClause level'' localnames'' c
         return ((ps',c'), fvc S.\\ fvP)
@@ -361,17 +343,6 @@ renameLocalDeclsWork level' localnames currnames (Decls _ decls) cont = do
     checkEqualLengths pss =
       let rs = map length pss
       in and $ zipWith (==) rs (tail rs)
-
-
-hasRev :: Pat p -> Bool
-hasRev (PVar _)    = False
-hasRev (PREV _)    = True
-hasRev (PCon _ ps) = any (hasRev . unLoc) ps
-hasRev (PWild _)   = False
-
-hasWith :: Clause p -> Bool
-hasWith (Clause _ _ (Just _)) = True
-hasWith _                     = False
 
 
 renameLocalDecls :: DBLevel -> LocalNames -> Decls 'Parsing (LDecl 'Parsing)
@@ -570,13 +541,6 @@ renamePat1 level localnames boundVars (Loc loc pat) cont =
     -- go (PBang p) k =
     --   renamePat1 level localnames boundVars p $ \p' queue level' localnames' boundVars' ->
     --     k (PBang <$> p') queue level' localnames' boundVars'
-    go (PREV p) k =
-      k (PREV <$> fillLater) [p] level localnames boundVars
-
-    fillLater = do
-      ~(n:ns) <- get -- lazy pattern to avoid requiring MonadFail Identity.
-      put ns
-      return n
 
 renamePats :: DBLevel -> LocalNames -> BoundVars -> [LPat 'Parsing]
               -> ([LPat 'Renaming] -> DBLevel -> LocalNames -> BoundVars -> Renaming r) -> Renaming r
@@ -612,9 +576,6 @@ renamePat level localnames boundVars p k =
 --     go (PBang p) k =
 --       renamePat level localnames boundVars p $ \p' level' localnames' bvs' ->
 --         k (PBang p') level' localnames' bvs'
---     go (PREV p) k =
---       renamePat level localnames boundVars p $ \p' level' localnames' bvs' ->
---         k (PREV p') level' localnames' bvs'
 
 --     go (PWild _) k = do
 --       let n'  = Alpha level (User "_")

@@ -25,6 +25,9 @@ comma = symbol ","
 semicolon :: P m String
 semicolon = symbol ";"
 
+percent :: P m String
+percent = symbol "%"
+
 rightArrow :: P m String
 rightArrow = symbol "->" <|> symbol "→"
 
