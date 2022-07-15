@@ -95,12 +95,6 @@ instantiateQ (TyForAll ts qt) = do
   return $ substTyQ subs qt
 instantiateQ t = return $ TyQual [] t
 
-ensureRevTy :: MonadTypeCheck m => MonoTy -> m MonoTy
-ensureRevTy ty = do
-  argTy <- newMetaTy
-  tryUnify (revTy argTy) ty
-  return argTy
-
 ensureFunTy :: MonadTypeCheck m => MonoTy -> m (MonoTy, MonoTy, MonoTy)
 ensureFunTy ty = do
   argTy <- newMetaTy
@@ -115,14 +109,6 @@ litTy (LitInt _)      = return $ TyCon nameTyInt []
 litTy (LitChar _)     = return $ TyCon nameTyChar []
 litTy (LitDouble _)   = return $ TyCon nameTyDouble []
 litTy (LitRational _) = return $ TyCon nameTyRational []
-
-hasPRev :: LPat 'Renaming -> Bool
-hasPRev (Loc _ p) = go p
-  where
-    go :: Pat 'Renaming -> Bool
-    go (PCon _ ps) = any hasPRev ps
-    go (PREV _)    = True
-    go _           = False
 
 checkPatsTyK :: MonadTypeCheck m =>
   [LPat 'Renaming] -> [Multiplication] -> [MonoTy] -> m a ->
@@ -163,7 +149,7 @@ checkPatTyWork ::
   Bool ->
   LPat 'Renaming -> Multiplication -> MonoTy ->
   m ([TyConstraint], LPat 'TypeCheck, [(Name, MonoTy, Multiplication)])
-checkPatTyWork isUnderRev (Loc loc pat) pmult patTy = do
+checkPatTyWork (Loc loc pat) pmult patTy = do
   (cs, pat', bind) <- atLoc loc $ go pat
   return (cs, Loc loc pat', bind)
   where
@@ -191,7 +177,7 @@ checkPatTyWork isUnderRev (Loc loc pat) pmult patTy = do
         foldr (\(csj,pj',bindj) (cs, ps', bind) -> (csj++cs, pj':ps', bindj ++ bind)) ([],[],[]) <$>
         zipWithM (\pj (tj, mj) -> do
                     m <- ty2mult mj
-                    checkPatTyWork isUnderRev pj (lub m pmult) tj)
+                    checkPatTyWork pj (lub m pmult) tj)
                  ps
                  args
 
@@ -199,25 +185,9 @@ checkPatTyWork isUnderRev (Loc loc pat) pmult patTy = do
       return (q++cs, PCon (c, tyOfC) ps', bind)
 
 
-
-
-    go (PREV p) = do
-      when isUnderRev $ atLoc (location p) $
-        reportError $ Other $ text "rev patterns cannot be nested."
-
-      ty <- ensureRevTy patTy
-      (cs, p', bind) <- checkPatTyWork True p pmult ty
-      let bind' = map (\(x,t,m) -> (x, revTy t,m)) bind
-
-      forM_ bind' $ \(_, _, m) ->
-        -- TODO: Add good error messages.
-        addConstraint $ msubMult m one
-
-      return (cs, PREV p', bind')
-
     go (PWild x) = do -- this is only possible when pmult is omega
       -- tryUnify pmult (TyMult Omega)
-      ~(cs, Loc _ (PVar x'), _bind) <- checkPatTyWork isUnderRev (noLoc $ PVar x) omega patTy
+      ~(cs, Loc _ (PVar x'), _bind) <- checkPatTyWork (noLoc $ PVar x) omega patTy
       -- cs must be []
       addConstraint $ msubMult omega pmult
       return (cs, PWild x', [] )
@@ -579,7 +549,6 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
       retTy <- newMetaTy
 
       ((e', umap), pats', bind) <- checkPatsTyK pats qs' ts $ do
-        when (any hasPRev pats) $ void $ ensureRevTy retTy
         checkTy e retTy
 
       let xqs = map (\(x,_,q) -> (x,q)) bind
@@ -608,7 +577,6 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
       (e1', umap1) <- checkTyM e1 ty1 qPat'
 
       ((e2', umap2), ~[p'], bind) <- checkPatsTyK [p] [qPat'] [ty1] $ do
-        when (hasPRev p) $ void $ ensureRevTy expectedTy
         checkTy e2 expectedTy
 
       let xqs = map (\(x,_,q) -> (x,q)) bind
@@ -661,7 +629,7 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
       return (Lift, M.empty)
       where
         liftTy tyA tyB =
-          (tyA *-> tyB) *-> (tyB *-> tyA) *-> (revTy tyA -@ revTy tyB)
+          (tyA *-> tyB) *-> (tyB *-> tyA) *-> (tyA -@ tyB)
 
     go Unlift = do
       tyA <- newMetaTy
@@ -700,16 +668,6 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
       (e2', umap2) <- {- withMultVars [m1,m2] $ -} checkTyM e2 ty2 mul2
       return (Op (op, tyOfOp) e1' e2', mergeUseMap umap1 umap2)
 
-    go (RCon c) = do
-      tyOfC_ <- instantiate =<< askType loc c
-      let tyOfC = addRev tyOfC_
-      tryUnify tyOfC expectedTy
-      return (RCon (c, tyOfC), M.empty)
-        where
-          -- FIXME: m must be one
-          addRev (TyCon t [m, t1,t2]) | t == nameTyArr = TyCon t [m, revTy t1, addRev t2]
-          addRev t                                     = revTy t
-
     go (Let decls e) = do
       (decls', bind, umapLet) <- inferDecls False decls
       (e', umap)              <- {- withUnrestrictedVars -} withVars bind $ checkTy e expectedTy
@@ -724,38 +682,6 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
       (alts', umapA) <- {- withMultVar (TyMetaV p) $ -} checkAltsTy alts tyPat mul expectedTy
 
       return (Case e0' alts', mergeUseMap umap0 umapA)
-
-    go (RDO as0 er) = do
-      (as0', bind, umap) <- goAs as0
-      let bind' = map (\(x,t,_) -> (x, revTy t)) bind
-      let xs = map (\(x,_) -> x) bind'
-      let xqs = [ (x, one) | x <- xs ]
-
-      (er', umapr) <- withVars bind' $ checkTy er expectedTy
-      constrainVars xqs umapr
-
-      return (RDO as0' er', mergeUseMap umap (foldr M.delete umapr xs))
-      where
-        goAs [] = return ([], [], M.empty)
-        goAs ((p,e):as) = do
-          tyE <- newMetaTy
-          (e', umapE) <- checkTy e (revTy tyE)
-
-          -- (p', bind)  <- checkPatTy p omega tyE
-
-          -- let xqs = map (\(x,_,q) -> (x,q)) bind
-
-          -- (as', bindAs, umapAs) <- withVars [ (n,t) | (n,t,_) <- bind ] $ goAs as
-
-          ((as', bindAs, umapAs), ~[p'], bind) <- checkPatsTyK [p] [omega] [tyE] $ do
-            goAs as
-          let xqs = map (\(x,_,q) -> (x,q)) bind
-
-
-          constrainVars xqs umapAs
-
-          return ((p',e'):as', bindAs ++ bind,
-                   mergeUseMap (foldr (M.delete . fst) umapAs xqs) umapE)
 
 checkGeneralizeTy :: MonadTypeCheck m => SrcSpan -> Bool -> MonoTy -> UseMap -> PolyTy -> m ()
 checkGeneralizeTy loc isTopLevel ty um polyTy2
@@ -894,7 +820,6 @@ checkAltsTy alts patTy q bodyTy =
       -- (c', umap)   <- withVars [ (n,t) | (n,t,_) <- bind ] $ checkClauseTy c bodyTy
 
       ~((c', umap), [pat'], bind) <- checkPatsTyK [pat] [q] [patTy] $ do
-          when (hasPRev pat) $ void $ ensureRevTy bodyTy
           checkClauseTy c bodyTy
 
       let xqs = map (\(x,_,qq) -> (x,qq)) bind
@@ -972,20 +897,13 @@ inferTopDecls decls dataDecls typeDecls = do
      -- liftIO $ putStrLn $ show cs
      return (decls', nts, dataDecls', typeDecls', ctypeTable, synTable)
   where
-    convConDecl (NormalC  cn      tys) = (cn, [], [], map ty2ty tys)
-    convConDecl (GeneralC cn xs q tys) = (cn, xs, concatMap c2c q, map (ty2ty . fst) tys)
+    convConDecl (NormalC  cn      ty) = (cn, [], [], fmap ty2ty ty)
 
     mkConTable (n, ns, cdecls) =
       let tvs = map BoundTv ns
           retTy = TyCon n $ map TyVar tvs
-      in flip map cdecls $ \case (Loc _ (NormalC cn tys)) ->
-                                   (cn, ConTy tvs [] [] [(ty2ty ty, TyMult one) | ty <- tys] retTy)
-                                 (Loc _ (GeneralC cn xs q tyms)) ->
-                                   let xs'   = map BoundTv xs
-                                       q'    = concatMap c2c q
-                                       tyms' = map (\(t,m) -> (ty2ty t, ty2ty m)) tyms
-                                   in (cn, ConTy tvs xs' q' tyms' retTy)
-
+      in flip map cdecls $ \(Loc _ (NormalC cn ty)) ->
+                             (cn, ConTy tvs [] [] (fmap ty2ty ty) retTy)
 
 
 inferMutual :: MonadTypeCheck m =>
@@ -1087,7 +1005,6 @@ inferMutual isTopLevel decls = do
         -- (c', umap) <- withVars [ (n,t) | (n,t,_) <- bind ] $ checkClauseTy c retTy
 
         ((c', umap), ps', bind) <- checkPatsTyK ps muls tys $ do
-            when (any hasPRev ps) $ void $ ensureRevTy retTy
             checkClauseTy c retTy
 
         tryUnify (foldr (uncurry tyarr) retTy $ zip qs tys) expectedTy
@@ -1107,7 +1024,7 @@ checkClauseTy (Clause e ws wi) expectedTy = do
     (e',  umapE) <- checkTy e expectedTy
     (wi', umapWi) <- case wi of
              Just ewi -> do
-               ty   <- atLoc (location e) $ ensureRevTy expectedTy
+               ty   <- atLoc (location e) expectedTy
                (ewi', umapWi) <- checkTyM ewi (ty *-> boolTy) omega
                return (Just ewi', umapWi)
              Nothing -> return (Nothing, M.empty)

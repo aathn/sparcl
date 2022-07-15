@@ -54,11 +54,10 @@ varidRaw :: P m String
 varidRaw = (:) <$> P.lowerChar <*> P.many (P.alphaNumChar <|> P.char '\'')
 
 keyWords :: [String]
-keyWords = ["local", "let", "let1", "in", "if", "then", "else", "where", "end",
-            "case", "of", "with", "rev", "module", "import",
+keyWords = ["let", "in", "if", "then", "else", "where", "end",
+            "case", "of", "with", "module", "import",
             "sig", "def", "data", "type", "fixity",
-            "lift", "unlift", "pin",
-            "revdo" ]
+            "lift", "pin" ]
 
 varName :: Monad m => P m SurfaceName
 varName = P.try (do x <- varidRaw

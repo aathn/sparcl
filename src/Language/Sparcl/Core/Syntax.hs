@@ -34,7 +34,7 @@ data Exp n
   | Lift !(Exp n) !(Exp n)
 
   | RApp !(Exp n) !(Exp n)
-  | RDo  !n !(Exp n) !(Exp n)
+  | RPin  !n !(Exp n) !(Exp n)
   | RCase !(Exp n) ![ (Pat n, Exp n, Exp n ) ]
 
 
@@ -59,7 +59,7 @@ freeVars = Set.toList . ($ Set.empty) . go Set.empty
 
       RApp e1 e2   -> go bound e1 . go bound e2
       RCase e alts -> go bound e . gather (goRAlt bound) alts
-      RDo n e1 e2  -> let bound' = Set.insert n bound in
+      RPin n e1 e2  -> let bound' = Set.insert n bound in
                         go bound' e1 . go bound' e2
 
     goRAlt bound (p, e, e') =
@@ -111,8 +111,8 @@ instance Pretty n => Pretty (Exp n) where
   pprPrec k (RApp e1 e2) = parensIf (k > 9) $
     pprPrec 9 e1 D.<+> D.text "%" D.<+> pprPrec 10 e2
 
-  pprPrec k (RDo n e1 e2) = parensIf (k > 0) $
-    D.text "do*" D.<+> D.align (ppr n <+> text "<-" <+> ppr e1 <+> text "in") D.</>
+  pprPrec k (RPin n e1 e2) = parensIf (k > 0) $
+    D.text "pin" D.<+> D.align (ppr n <+> text "<-" <+> ppr e1 <+> text "in") D.</>
     pprPrec 0 e2
 
   pprPrec k (RCase e0 ps) = parensIf (k > 0) $ D.group $ D.align $

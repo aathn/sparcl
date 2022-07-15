@@ -70,38 +70,20 @@ testMonoTy (TySyn _ t) = testMonoTy t
 testMonoTy t = Just t
 
 
-{- |
-
-We have a specfical treatment for constructor types, as this the only point
-we introduce existential variables.
-
-In it's use there is not difference between universal and existential variables---they are treated as
-ordinary types.
-
-In pattern matching, their behaviors are different. Universal variables are replaced with
-unification variables, but existential varibles are replaced with skolemized variables.
-
-Skolemized variables cannot escape in the resulting type, and use map.
-
--}
 data ConTy = ConTy ![TyVar]        -- universal variables
-                   ![TyVar]        -- existential variables
-                   ![TyConstraint] -- constraints
-                   ![(Ty, Ty)]     -- constructor's arugument types (a pair of a type and a multipliticy)
+                   ![Ty]           -- constructor's arugument type
                    !Ty             -- constructor's return types
 
 instance Pretty ConTy where
-  ppr (ConTy xs ys q args ty) =
-    let hd d = if null (xs ++ ys) then d
-               else hsep [ text "forall", hsep (map ppr xs ++ map ppr ys) <> text "." ] <> align d
-        ql d = if null q then d
-               else sep [ parens (hsep $ punctuate comma $ map ppr q) <+> text "=>", d ]
-    in hd $ ql $ foldr (\(a,m) r -> pprPrec 1 a <+> text "#" <+> ppr m <+> text "->" <+> r) (ppr ty) args
+  ppr (ConTy xs args ty) =
+    let hd d = if null xs then d
+               else hsep [ text "forall", hsep (map ppr xs) <> text "." ] <> align d
+    in hd $ foldr (\a r -> pprPrec 1 a <+> text "-o" <+> r) (ppr ty) args
 
 conTy2Ty :: ConTy -> Ty
-conTy2Ty (ConTy xs ys q argTy retTy) =
-  let t = foldr (\(s,m) r -> TyCon nameTyArr [m, s, r]) retTy argTy
-  in TyForAll (xs ++ ys) (TyQual q t)
+conTy2Ty (ConTy xs argTy retTy) =
+  let t = foldr (-@) retTy argTy
+  in TyForAll xs (TyQual [] t)
 
 instance MultiplicityLike Ty where
   one   = TyMult One
@@ -188,11 +170,6 @@ instance Pretty Ty where
   pprPrec _ (TyCon c ts)
     | c == nameTyTuple (length ts) =
         D.parens $ D.hsep $ D.punctuate D.comma $ map (pprPrec 0) ts
-  pprPrec k (TyCon c [t])
-    | c == nameTyBang =
-        parensIf (k > 1) $ D.text "!" D.<> pprPrec 1 t
-    | c == nameTyRev =
-        parensIf (k > 1) $ D.text "rev" D.<+> pprPrec 2 t
 
   pprPrec _ (TyCon c []) = ppr c
   pprPrec k (TyCon c [m,a,b]) | c == nameTyArr = parensIf (k > 0) $
@@ -338,12 +315,6 @@ instance MetaTyVars TyConstraint where
 
 metaTyVars :: MetaTyVars t => t -> [MetaTyVar]
 metaTyVars t = S.toList $ appEndo (metaTyVarsGen (\x -> Endo (S.insert x)) t) S.empty
-
-bangTy :: Ty -> Ty
-bangTy ty = TyCon nameTyBang [ty]
-
-revTy :: Ty -> Ty
-revTy ty = TyCon nameTyRev [ty]
 
 (-@) :: Ty -> Ty -> Ty
 t1 -@ t2 = TyCon nameTyArr [TyMult One, t1, t2]

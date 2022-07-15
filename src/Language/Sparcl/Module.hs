@@ -260,40 +260,34 @@ baseModuleInfo = ModuleInfo {
     unRat _                      = cannotHappen $ text "Not a rational"
 
     conTable = M.fromList [
-      conTrue  |-> ConTy [] [] [] [] boolTy,
-      conFalse |-> ConTy [] [] [] [] boolTy,
-      base "U" |->
-        let a = BoundTv (Local $ User "a")
-        in ConTy [a] [] [] [(TyVar a, omega)] (TyCon (base "Un") [TyVar a]),
-      base "MkMany" |->
-        let [a, p] = map (BoundTv . Local . User) ["a", "p"]
-        in ConTy [p, a] [] [] [(TyVar a, TyVar p)] (TyCon (base "Many") [TyVar p, TyVar a])
+      conTrue  |-> ConTy [] Nothing boolTy,
+      conFalse |-> ConTy [] Nothing boolTy,
       ]
 
     typeTable = M.fromList [
-          base "+" |-> intTy -@ (intTy -@ intTy),
-          base "-" |-> intTy -@ (intTy -@ intTy),
-          base "*" |-> intTy -@ (intTy -@ intTy),
-          base "%" |-> intTy -@ (intTy -@ rationalTy),
+          base "+" |-> intTy *-> (intTy *-> intTy),
+          base "-" |-> intTy *-> (intTy *-> intTy),
+          base "*" |-> intTy *-> (intTy *-> intTy),
+          base "%" |-> intTy *-> (intTy *-> rationalTy),
 
           -- operators on rationals
-          base "+%" |-> rationalTy -@ (rationalTy -@ rationalTy),
-          base "-%" |-> rationalTy -@ (rationalTy -@ rationalTy),
-          base "*%" |-> rationalTy -@ (rationalTy -@ rationalTy),
-          base "/%" |-> rationalTy -@ (rationalTy -@ rationalTy),
+          base "+%" |-> rationalTy *-> (rationalTy *-> rationalTy),
+          base "-%" |-> rationalTy *-> (rationalTy *-> rationalTy),
+          base "*%" |-> rationalTy *-> (rationalTy *-> rationalTy),
+          base "/%" |-> rationalTy *-> (rationalTy *-> rationalTy),
 
           -- In future, we should use type classes.
-          eqInt  |-> intTy -@ intTy -@ boolTy,
-          leInt  |-> intTy -@ intTy -@ boolTy,
-          ltInt  |-> intTy -@ intTy -@ boolTy,
+          eqInt  |-> intTy *-> intTy *-> boolTy,
+          leInt  |-> intTy *-> intTy *-> boolTy,
+          ltInt  |-> intTy *-> intTy *-> boolTy,
 
-          eqChar |-> charTy -@ charTy -@ boolTy,
-          leChar |-> charTy -@ charTy -@ boolTy,
-          ltChar |-> charTy -@ charTy -@ boolTy,
+          eqChar |-> charTy *-> charTy *-> boolTy,
+          leChar |-> charTy *-> charTy *-> boolTy,
+          ltChar |-> charTy *-> charTy *-> boolTy,
 
-          eqRational |-> rationalTy -@ rationalTy -@ boolTy,
-          leRational |-> rationalTy -@ rationalTy -@ boolTy,
-          ltRational |-> rationalTy -@ rationalTy -@ boolTy,
+          eqRational |-> rationalTy *-> rationalTy *-> boolTy,
+          leRational |-> rationalTy *-> rationalTy *-> boolTy,
+          ltRational |-> rationalTy *-> rationalTy *-> boolTy,
 
           nameTyInt  |-> typeKi,
           nameTyBool |-> typeKi,

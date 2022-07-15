@@ -446,7 +446,7 @@ tupleConTy n =
   let tvs = map BoundTv [ Alpha i (User $ 't':show i) | i <- [1..n] ]
       tys = map TyVar tvs
   in -- ConTy tvs [] [] $ foldr (-@) (tupleTy tys) tys
-    ConTy tvs [] [] [ (t , one) | t <- tys ] (tupleTy tys)
+    ConTy tvs tys (tupleTy tys)
 --  in TyForAll tvs $ TyQual [] $ foldr (-@) (tupleTy tys) tys
 
 arbitraryTy :: MonadTypeCheck m => m Ty

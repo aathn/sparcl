@@ -181,7 +181,7 @@ data Exp p
   | Var !(XId p)
   | App !(LExp p) !(LExp p)
   | Abs ![LPat p] !(LExp p)
-  | Con !(XId p)
+  | Con !(XId p) ![LExp p]
   | Case !(LExp p) ![ (LPat p, Clause p) ]
   | Lift
   | Sig  !(LExp p) !(LTy p)
@@ -192,7 +192,7 @@ data Exp p
   | Op  !(XId p) !(LExp p) !(LExp p)
 
   | RApp !(LExp p) !(LExp p)
-  | RDo !(LPat p) !(LExp p) !(LExp p)
+  | RPin !(LPat p) !(LExp p) !(LExp p)
 
 
 instance AllPretty p => Pretty (LExp p) where
@@ -206,7 +206,9 @@ instance AllPretty p => Pretty (Exp p) where
   pprPrec k (Abs x e) = parensIf (k > 0) $
     D.text "\\" D.<> D.hsep (map ppr x) D.<+> D.text "->" D.<+> D.align (D.nest 2 (pprPrec 0 e))
 
-  pprPrec _ (Con c) = ppr c
+  pprPrec _ (Con c []) = ppr c
+  pprPrec k (Con c es) = parensIf (k > 0) $
+    ppr c D.<+> D.hsep (map (pprPrec 1) es)
 
   pprPrec k (Case e ps) = parensIf (k > 0) $
     D.text "case" D.<+> pprPrec 0 e D.<+> D.text "of" D.</>
@@ -241,8 +243,8 @@ instance AllPretty p => Pretty (Exp p) where
   pprPrec k (RApp e1 e2) = parensIf (k > 9) $
     pprPrec 9 e1 D.<+> D.text "%" D.<+> pprPrec 10 e2
 
-  pprPrec k (RDo p e1 e2) = parensIf (k > 0) $ D.align $
-    D.text "do*" D.<+> D.align (ppr p <+> text "<-" <+> ppr e1 <+> D.text "in") D.</>
+  pprPrec k (RPin p e1 e2) = parensIf (k > 0) $ D.align $
+    D.text "pin" D.<+> D.align (ppr p <+> text "<-" <+> ppr e1 <+> D.text "in") D.</>
     pprPrec 0 e2
 
 
@@ -322,11 +324,6 @@ type LDecl p = Loc (Decl p)
 data CDecl p
   = NormalC !(XId p)  -- constructor name
             ![LTy p]  -- constructor argument
-  | GeneralC !(XId p) -- constructor name
-             ![XTId p]        -- xs of forall xs. C => ...
-             ![TConstraint p] -- C  of forall xs. C => ...
-             ![ (LTy p, LTy p) ] -- arguments together with their multiplicity
-
 
 instance AllPretty p => Pretty (Loc (CDecl p)) where
   ppr (Loc l d) =
@@ -337,12 +334,6 @@ instance AllPretty p => Pretty (CDecl p) where
   ppr (NormalC c []) = ppr c
   ppr (NormalC c args) =
     ppr c D.<+> D.hsep [ pprPrec 1 a | a <- args ]
-  ppr (GeneralC c xs ctxt args) =
-    text "exists"
-    <+> vcat (map ppr xs) <> text "."
-    <+> case ctxt of { [] -> empty ; _ -> ppr ctxt <+> text "=>" }
-    <+> ppr c <+> hsep [ parens (pprPrec 1 a <+> text "#" <+> pprPrec 1 m) | (a, m) <- args ]
-
 
 data Decls p x = Decls  (XDecls p)  [x]
                | HDecls (XHDecls p) [[x]]

@@ -144,9 +144,10 @@ renameExp level localnames (Loc loc expr) = first (Loc loc) <$> go expr
         return (p', e', fv S.\\ bvP)
       return (Let1 p' e1' e2', fv1 `S.union` fv2)
 
-    go (Con c) = do
+    go (Con c es) = do
       c' <- resolveImportedName loc c
-      return (Con c', S.empty)
+      (es', fvs) <- unzip <$> mapM (renameExp level localnames) es
+      return (Con c' es', S.unions fvs)
 
     go Lift = return (Lift, S.empty)
 
@@ -182,12 +183,12 @@ renameExp level localnames (Loc loc expr) = first (Loc loc) <$> go expr
       (e2', fv2) <- renameExp level localnames e2
       return (RApp e1' e2', S.union fv1 fv2)
 
-    go (RDo p e1 e2) = do
+    go (RPin p e1 e2) = do
       (e1', fv1) <- renameExp level localnames e1
       (p', e2', fv2) <- renamePat level localnames S.empty p $ \p' level' localnames' bvP -> do
         (e' , fv) <- renameExp level' localnames' e2
         return (p', e', fv S.\\ bvP)
-      return (RDo p' e1' e2', fv1 `S.union` fv2)
+      return (RPin p' e1' e2', fv1 `S.union` fv2)
 
 
 
@@ -380,7 +381,6 @@ renameTopDecls currentModule (Decls _ topdecls) = do
   let ns  = [ n | (_, n, _) <- defs ]
 
   let conName (NormalC c _)      = c
-      conName (GeneralC c _ _ _) = c
   let names = ns
               ++ [ n | (_, n, _, _) <- dataDecls ]
               ++ [ unBare n | (_, _, _, cds) <- dataDecls, n <- map (conName . unLoc) cds ]
@@ -408,20 +408,10 @@ renameTopDecls currentModule (Decls _ topdecls) = do
     dataDecls' <- forM dataDecls $ \(loc, n, tyns, cdecls) -> do
       let tyns' = zipWith Alpha [0..] tyns
       let nm = M.fromList $ zip tyns tyns'
-      cdecls' <- forM cdecls $ \case
-        (Loc cloc (NormalC c tys)) -> do
-          tys' <- mapM (renameTy (length tyns) nm) tys
-          return $ Loc cloc (NormalC (toOrig $ unBare c) tys')
-        (Loc cloc (GeneralC c xs q ts)) -> do
-          let xs' = zipWith Alpha [length tyns..] $ map unBare xs
-          let lv  = length tyns + length xs
-          let nm' = foldr (uncurry M.insert) nm $ zip (map unBare xs) xs'
-          q'  <- mapM (renameTyC lv nm') q
-          ts' <- mapM (\(m,t) -> do
-                          m' <- renameTy lv nm' m
-                          t' <- renameTy lv nm' t
-                          return (m', t')) ts
-          return $ Loc cloc $ GeneralC (toOrig $ unBare c) xs' q' ts'
+      cdecls' <- forM cdecls $ \
+        (Loc cloc (NormalC c ty)) -> do
+          ty' <- mapM (renameTy (length tyns) nm) ty
+          return $ Loc cloc (NormalC (toOrig $ unBare c) ty')
       return $ Loc loc (toOrig n, tyns', cdecls')
 
     renameLocalDeclsWork level' M.empty currnames (Decls () decls) $ \ds' _ _ _boundVars _ opTable ->

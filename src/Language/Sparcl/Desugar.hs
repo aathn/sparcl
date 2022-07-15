@@ -62,14 +62,8 @@ desugarExp (Loc _ expr) = go expr
 
     go (S.Abs ps e) = desugarRHS [(ps, S.Clause e (S.HDecls () []) Nothing)]
 
-    go (S.Con (c, ty)) = do
-      ty' <- zonkType ty
-      let n = numberOfArgs ty'
-      withNewNames n $ \xs -> do
-        let b = C.Con c [ C.Var x | x <- xs ]
-        return $ foldr C.Abs b xs
-    -- go (S.Con (c,_ty) es) =
-    --   C.Con c <$> mapM desugarExp es
+    go (S.Con (c,_ty) es) =
+      C.Con c <$> mapM desugarExp es
 
     go (S.Case e alts) = do
       e'  <- desugarExp e
@@ -105,27 +99,9 @@ desugarExp (Loc _ expr) = go expr
     go (S.RApp e1 e2)  =
       C.RApp <$> desugarExp e1 <*> desugarExp e2
 
-    go (S.RDo p1 e1 e2) = withNewName $ \n -> do
+    go (S.RPin p1 e1 e2) = withNewName $ \n -> do
       r <- desugarAlts [(p1, S.Clause (noLoc e2) (S.HDecls () []) Nothing)]
-      return $ C.RDo n e1 (makeCase (C.Var n) r)
-
-
-
-desugarRDO :: [(S.LPat 'TypeCheck, Loc (S.Exp 'TypeCheck))] -> Loc (S.Exp 'TypeCheck) -> Loc (S.Exp 'TypeCheck)
-desugarRDO = go [] id
-  where
-    app e1 e2 = noLoc (S.App e1 e2)
-    go _  _    [] er = er -- this branch is used only for the expressions of the form "revdo in e0"
-    go ps kpin [(p,e)] er =
-      let pinExp = kpin e
-          pat    = noLoc $ S.PREV $ foldr1 (\p1 p2 -> makeTuplePatS [p1, p2]) $ reverse (p:ps)
-      in noLoc $ S.Case pinExp [ (pat, S.Clause er (S.HDecls () []) Nothing)]
-
-    go ps kpin ((p,e):as) er =
-      let k hole = kpin $ noLoc S.RPin `app`
-                          e `app`
-                          noLoc (S.Abs [p] hole)
-      in go (p:ps) k as er
+      return $ C.RPin n e1 (makeCase (C.Var n) r)
 
 
 makeTupleExpC :: [C.Exp Name] -> C.Exp Name
@@ -153,68 +129,12 @@ mkAbs :: Ord n => n -> C.Exp n -> C.Exp n
 mkAbs n (C.App e (C.Var m)) | n == m && n `notElem` C.freeVars e = e
 mkAbs n e                   = C.Abs n e
 
-mkApp :: Eq n => C.Exp n -> C.Exp n -> C.Exp n
-mkApp (C.Abs n e) e1 =
-  case punchHoleAffine n e of
-    Just c  -> c e1
-    Nothing -> C.App (C.Abs n e) e1
-  --subst n e1 e
-mkApp e1 e2          = C.App e1 e2
+mkApp :: C.Exp n -> C.Exp n -> C.Exp n
+mkApp e1 e2 = C.App e1 e2
 
 -- data CheckSubst a = Substituted a
 --                   | Untouched   a
 --                   deriving Functor
-
-
-data Occ a = Once !a | None !a | More
-  deriving Functor
-
-liftO2 :: (a -> b -> r) -> Occ a -> Occ b -> Occ r
-liftO2 f (None a) (None b) = None (f a b)
-liftO2 f (None a) (Once b) = Once (f a b)
-liftO2 f (Once a) (None b) = Once (f a b)
-liftO2 _ (Once _) (Once _) = More
-liftO2 _ _        _        = More
-
--- @punchHoleAffine n e@ checks if @n@ occurs at most once in @e@, and
--- returned a holed expression if so.
-
-punchHoleAffine :: Eq n => n -> C.Exp n -> Maybe (C.Exp n -> C.Exp n)
-punchHoleAffine n = conv . go
-  where
-    conv More     = Nothing
-    conv (None f) = Just f
-    conv (Once f) = Just f
-
-    list :: Monad f => [Occ (f a)] -> Occ (f [a])
-    list = foldr (liftO2 $ liftM2 (:)) (None $ pure [])
-
-    go (C.Var x) | x == n    = Once id
-                 | otherwise = None (const $ C.Var x)
-
-    go (C.Lit l) = None (const $ C.Lit l)
-    go (C.App e1 e2) =
-      liftO2 (liftM2 C.App) (go e1) (go e2)
-
-    go (C.Abs x e) | x == n    = None (const $ C.Abs x e)
-                   | otherwise = fmap (C.Abs x) <$> go e
-
-    go (C.Con c es) =
-      fmap (C.Con c) <$> list (map go es)
-
-    go (C.Case _ _) = More
-    go (C.Let _ _) = More
-    go (C.RCase _ _) = More
-
-    go (C.Lift e1 e2) =
-      liftO2 (liftM2 C.Lift) (go e1) (go e2)
-
-    go (C.Unlift e) = fmap C.Unlift <$> go e
-    go (C.RCon c es) =
-      fmap (C.RCon c) <$> list (map go es)
-
-    go (C.RPin e1 e2) =
-      liftO2 (liftM2 C.RPin) (go e1) (go e2)
 
 
 desugarRHS :: MonadDesugar m => [([S.LPat 'TypeCheck], S.Clause 'TypeCheck)] -> m (C.Exp Name)

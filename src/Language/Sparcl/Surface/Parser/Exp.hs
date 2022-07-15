@@ -20,7 +20,6 @@ import           Text.Megaparsec                       ((<|>))
 
 import           Control.Monad
 
-import           Data.List                             (nub, (\\))
 import           Data.Maybe                            (fromMaybe)
 
 
@@ -308,33 +307,8 @@ topDecl = typeDecl <|> dataDecl <|> (fmap DDecl <$> localDecl)
     dataDecl = loc $ do
       void $ keyword "data"
       (c, xs) <- tyLHS
-      gadtDecl c xs <|> normalDecl c xs
-      where
-        normalDecl c xs = do
-          void $ symbol "="
-          DData c xs <$> (P.try cdecl <|> gadtCDecl c xs) `P.sepBy1` symbol "|"
-
-        gadtDecl c xs = do
-          void $ keyword "where"
-          cs <- P.many (keyword "sig" *> gadtCDecl c xs)
-          void $ keyword "end"
-          return $ DData c xs cs
-
-    gadtCDecl tc xs = do
-      start <- getSrcLoc
-      c <- conName <* sp
-      void $ symbol ":"
-      ty <- arrTy
-      let (args, ret) = decomposeArrTy ty
-      targs       <- maybe (fail $ "A return type of GADT-style definition must be headed by the type constructor.") return $ decomposeTyCon tc ret
-      let ftv = (nub $ freeTyVars args ++ freeTyVars targs) \\ xs
-      let l = start <> mconcat (map location targs)
-      let q = map (\(x,y) -> TyEq (noLoc $ TVar x) y)
-              $ filter (\(x,y) -> case unLoc y of TVar y' -> x /= y'
-                                                  _       -> True )
-              $ zip xs targs
-      return $ Loc l $ GeneralC c ftv q args
-
+      void $ symbol "="
+      DData c xs <$> cdecl `P.sepBy1` symbol "|"
 
     typeDecl = loc $ do
       void $ keyword "type"
@@ -410,7 +384,7 @@ opExpr =
   foldl (\a f -> f a)  <$>
        funExpr <*> P.many ((rapp <|> lop) <*> funExpr)
   where
-    rapp = void percent >> sp >> return (locFun RApp)
+    rapp = void (symbol "@") >> sp >> return (locFun RApp)
     lop = (locFun . Op) <$> qop <* sp
     locFun f e2 e1 = Loc (location e1 <> location e2) $ f e1 e2
 
@@ -445,52 +419,50 @@ funExpr = getSrcLoc >>= \startLoc ->
       endLoc <- getSrcLoc
       return $ Loc (startLoc <> endLoc) $ Case e0 alts)
   <|>
-  (do void $ keyword "do*"
+  (do void $ keyword "pin"
       p <- pat
       void leftArrow
       e1 <- expr
       void $ keyword "in"
       e2 <- expr
-      return $ Loc (startLoc <> location e2) $ RDo p e1 e2)
+      return $ Loc (startLoc <> location e2) $ RPin p e1 e2)
   <|>
   appExpr
+  <|>
+  conApp
 
 appExpr :: Monad m => P m (LExp 'Parsing)
 appExpr =
   (\(f:fs) -> foldl lapp f fs) <$> P.some (withLoc simpleExpr)
+  where
+    lapp :: Loc (Exp p) -> Loc (Exp p) -> Loc (Exp p)
+    lapp e1 e2 = Loc (location e1 <> location e2) $ App e1 e2
 
-
-lapp :: Loc (Exp p) -> Loc (Exp p) -> Loc (Exp p)
-lapp e1 e2 = Loc (location e1 <> location e2) $ App e1 e2
+conApp :: Monad m => P m (LExp 'Parsing)
+conApp = do
+  startLoc <- getSrcLoc
+  c <- qconName
+  es <- P.some (withLoc simpleExpr)
+  endLoc <- getSrcLoc
+  return $ Loc (startLoc <> endLoc) $ Con c es
 
 simpleExpr :: Monad m => SrcSpan -> P m (LExp 'Parsing)
 simpleExpr startLoc =
   literal
   <|> liftExpr
-  <|> conExpr
   <|> varExpr
   <|> tupleExpr
   where
-    withEnd t = do
-      endLoc <- getSrcLoc
-      return $ Loc (startLoc <> endLoc) t
-
-    withEndSp t = do
-      endLoc <- getSrcLoc
-      sp
-      return $ Loc (startLoc <> endLoc) t
-
     liftExpr = do
       void $ keyword "lift"
-      withEnd Lift
-
-    conExpr = do
-      c <- qconName
-      withEndSp $ Con c
+      endLoc <- getSrcLoc
+      return $ Loc (startLoc <> endLoc) Lift
 
     varExpr = do
       x <- qvarOpName
-      withEndSp $ Var x
+      endLoc <- getSrcLoc
+      sp
+      return $ Loc (startLoc <> endLoc) $ Var x
 
 tupleExpr :: Monad m => P m (LExp 'Parsing)
 tupleExpr = mkTupleExp <$> parens (expr `P.sepBy` comma)
@@ -505,7 +477,7 @@ mkTuplePat ps  = Loc (mconcat $ map location ps) $
 mkTupleExp :: [Loc (Exp 'Parsing)] -> Loc (Exp 'Parsing)
 mkTupleExp [e] = Loc (location e) $ Parens e
 mkTupleExp es =
-  foldl lapp (noLoc $ Con $ BuiltIn $ nameTuple (length es)) es
+  noLoc $ Con (BuiltIn $ nameTuple (length es)) es
 
 
 literal :: Monad m => P m (LExp 'Parsing)
