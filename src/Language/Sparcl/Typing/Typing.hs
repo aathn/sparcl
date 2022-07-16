@@ -590,9 +590,9 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
 
       tryUnify ret expectedTy
 
-      es' <- zipWithM (\ej tj -> checkTy ej tj) es args
+      (es', umaps) <- unzip <$> zipWithM (\ej tj -> checkTy ej tj) es args
 
-      return (Con (c, ret) es')
+      return (Con (c, ret) es', foldl mergeUseMap M.empty umaps)
 
     go (Sig e tySyn) = do
       let sigTy = ty2ty tySyn
@@ -644,7 +644,6 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
       return (RApp e1' e2', mergeUseMap umap1 umap2)
 
     go (RPin p e1 e2) = do
-      qPat  <- newMetaTy
       ty1 <- newMetaTy
       ty2 <- newMetaTy
 
@@ -687,7 +686,6 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
       return (Let decls' e', mergeUseMap umap umapLet)
 
     go (Case e0 alts) = do
-      p <- newMetaTyVar -- multiplicity of `e`
       let mul = if any (isJust . withExp . snd) alts then one else omega
 
       tyPat <- newMetaTy
@@ -916,7 +914,7 @@ inferTopDecls decls dataDecls typeDecls = do
       let tvs = map BoundTv ns
           retTy = TyCon n $ map TyVar tvs
       in flip map cdecls $ \(Loc _ (NormalC cn ty)) ->
-                             (cn, ConTy tvs [] [] (fmap ty2ty ty) retTy)
+                             (cn, ConTy tvs (fmap ty2ty ty) retTy)
 
 
 inferMutual :: MonadTypeCheck m =>
@@ -1037,8 +1035,7 @@ checkClauseTy (Clause e ws wi) expectedTy = do
     (e',  umapE) <- checkTy e expectedTy
     (wi', umapWi) <- case wi of
              Just ewi -> do
-               ty   <- atLoc (location e) expectedTy
-               (ewi', umapWi) <- checkTyM ewi (ty *-> boolTy) omega
+               (ewi', umapWi) <- checkTyM ewi (expectedTy *-> boolTy) omega
                return (Just ewi', umapWi)
              Nothing -> return (Nothing, M.empty)
     return (Clause e' ws' wi', umap `mergeUseMap` umapE `mergeUseMap` umapWi)

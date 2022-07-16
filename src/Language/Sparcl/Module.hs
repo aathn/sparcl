@@ -8,10 +8,8 @@ import qualified Data.Set                        as S
 import           Data.Function                   (on)
 import           Data.Ratio                      ((%))
 
-import           System.Directory                as Dir (createDirectoryIfMissing,
-                                                         doesFileExist)
-import qualified System.FilePath                 as FP (takeDirectory, (<.>),
-                                                        (</>))
+import           System.Directory                as Dir (doesFileExist)
+import qualified System.FilePath                 as FP ((<.>), (</>))
 
 import           Control.Monad                   (forM, when)
 import           Control.Monad.Catch
@@ -24,15 +22,12 @@ import           Language.Sparcl.Class
 import           Language.Sparcl.Core.Syntax
 import           Language.Sparcl.Desugar
 import           Language.Sparcl.Exception
-import           Language.Sparcl.Multiplicity
 import           Language.Sparcl.Renaming
 import           Language.Sparcl.Surface.Syntax  (Assoc (..), Prec (..))
 import           Language.Sparcl.Typing.TCMonad
 import           Language.Sparcl.Typing.Type
 import           Language.Sparcl.Typing.Typing
 import           Language.Sparcl.Value
-
-import           Language.Sparcl.CodeGen.Haskell (targetFilePath, toDocTop)
 
 import           Language.Sparcl.DebugPrint
 import           Language.Sparcl.Surface.Parsing
@@ -68,8 +63,8 @@ data ModuleInfo v = ModuleInfo {
   miTypeTable  :: !TypeTable,
   miConTable   :: !CTypeTable,
   miSynTable   :: !SynTable,
-  miValueTable :: !(M.Map Name v),
-  miHsFile     :: !FilePath
+  miValueTable :: !(M.Map Name v)
+  -- miHsFile     :: !FilePath
   }
 
 -- for caching.
@@ -237,8 +232,8 @@ baseModuleInfo = ModuleInfo {
   miConTable   = conTable,
   miTypeTable  = typeTable,
   miSynTable   = synTable,
-  miValueTable = valueTable,
-  miHsFile     = "Language.Sparcl.Base"
+  miValueTable = valueTable
+  -- miHsFile     = "Language.Sparcl.Base"
   }
   where
     eqInt = base "eqInt"
@@ -260,8 +255,8 @@ baseModuleInfo = ModuleInfo {
     unRat _                      = cannotHappen $ text "Not a rational"
 
     conTable = M.fromList [
-      conTrue  |-> ConTy [] Nothing boolTy,
-      conFalse |-> ConTy [] Nothing boolTy,
+      conTrue  |-> ConTy [] [] boolTy,
+      conFalse |-> ConTy [] [] boolTy
       ]
 
     typeTable = M.fromList [
@@ -315,23 +310,23 @@ baseModuleInfo = ModuleInfo {
           base "+" |-> intOp (+),
           base "-" |-> intOp (-),
           base "*" |-> intOp (*),
-          base "%" |-> (VFun $ \(VLit (LitInt n)) -> return $ VFun $ \(VLit (LitInt m)) -> return $ VLit (LitRational (fromIntegral n % fromIntegral m))),
+          base "%" |-> (VOp $ \(VLit (LitInt n)) -> return $ VOp $ \(VLit (LitInt m)) -> return $ VLit (LitRational (fromIntegral n % fromIntegral m))),
 
           base "+%" |-> ratOp (+),
           base "-%" |-> ratOp (-),
           base "*%" |-> ratOp (*),
           base "/%" |-> ratOp (/),
 
-          eqInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool $ ((==) `on` unInt ) n m),
-          leInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool $ ((<=) `on` unInt ) n m),
-          ltInt  |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool $ ((<)  `on` unInt ) n m),
-          eqChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool $ ((==) `on` unChar) c d),
-          leChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool $ ((<=) `on` unChar) c d),
-          ltChar |-> (VFun $ \c -> return $ VFun $ \d -> return $ fromBool $ ((<)  `on` unChar) c d),
+          eqInt  |-> (VOp $ \n -> return $ VOp $ \m -> return $ fromBool $ ((==) `on` unInt ) n m),
+          leInt  |-> (VOp $ \n -> return $ VOp $ \m -> return $ fromBool $ ((<=) `on` unInt ) n m),
+          ltInt  |-> (VOp $ \n -> return $ VOp $ \m -> return $ fromBool $ ((<)  `on` unInt ) n m),
+          eqChar |-> (VOp $ \c -> return $ VOp $ \d -> return $ fromBool $ ((==) `on` unChar) c d),
+          leChar |-> (VOp $ \c -> return $ VOp $ \d -> return $ fromBool $ ((<=) `on` unChar) c d),
+          ltChar |-> (VOp $ \c -> return $ VOp $ \d -> return $ fromBool $ ((<)  `on` unChar) c d),
 
-          eqRational |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool $ ((==) `on` unRat) n m),
-          leRational |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool $ ((<=) `on` unRat) n m),
-          ltRational |-> (VFun $ \n -> return $ VFun $ \m -> return $ fromBool $ ((<)  `on` unRat) n m)
+          eqRational |-> (VOp $ \n -> return $ VOp $ \m -> return $ fromBool $ ((==) `on` unRat) n m),
+          leRational |-> (VOp $ \n -> return $ VOp $ \m -> return $ fromBool $ ((<=) `on` unRat) n m),
+          ltRational |-> (VOp $ \n -> return $ VOp $ \m -> return $ fromBool $ ((<)  `on` unRat) n m)
 
           ]
 
@@ -340,8 +335,8 @@ baseModuleInfo = ModuleInfo {
     fromBool True  = VCon conTrue  []
     fromBool False = VCon conFalse []
 
-    intOp f = VFun $ \(VLit (LitInt n)) -> return $ VFun $ \(VLit (LitInt m)) -> return (VLit (LitInt (f n m)))
-    ratOp f = VFun $ \(VLit (LitRational n)) -> return $ VFun $ \(VLit (LitRational m)) -> return (VLit (LitRational (f n m)))
+    intOp f = VOp $ \(VLit (LitInt n)) -> return $ VOp $ \(VLit (LitInt m)) -> return (VLit (LitInt (f n m)))
+    ratOp f = VOp $ \(VLit (LitRational n)) -> return $ VOp $ \(VLit (LitRational m)) -> return (VLit (LitRational (f n m)))
 
     rationalTy = TyCon (base "Rational") []
     intTy = TyCon (base "Int") []
@@ -582,7 +577,7 @@ readModule fp interp = do
     debugPrint 1 $ text "Type checking ..."
     debugPrint 2 $ text "under ty env" </> pprMap tyEnv
 
-    (typedDecls, nts, dataDecls', typeDecls', newCTypeTable, newSynTable) <-
+    (typedDecls, nts, _dataDecls', _typeDecls', newCTypeTable, newSynTable) <-
       runTCWith conEnv tyEnv synEnv $ inferTopDecls renamedDecls tyDecls synDecls
 
     debugPrint 1 $ text "Type checking Ok."
@@ -593,13 +588,13 @@ readModule fp interp = do
     debugPrint 2 $ text "Desugared:" <> line <> align (vcat (map (\(x,_,e) -> ppr (x,e)) bind))
 
 
-    loadPath <- ask (key @KeyLoadPath)
-    let hsFile = loadPath FP.</> targetFilePath currentModule
+    -- loadPath <- ask (key @KeyLoadPath)
+    -- let hsFile = loadPath FP.</> targetFilePath currentModule
 
-    liftIO $ do let dir = FP.takeDirectory hsFile
-                Dir.createDirectoryIfMissing True dir
-                writeFile hsFile $
-                  show $ toDocTop currentModule exports imports dataDecls' typeDecls' bind
+    -- liftIO $ do let dir = FP.takeDirectory hsFile
+    --             Dir.createDirectoryIfMissing True dir
+    --             writeFile hsFile $
+    --               show $ toDocTop currentModule exports imports dataDecls' typeDecls' bind
 
     -- for de
 
@@ -620,8 +615,8 @@ readModule fp interp = do
           miSynTable  = newSynTable,
           miTypeTable = M.fromList nts,
           miConTable  = newCTypeTable,
-          miValueTable = M.fromList newValueEnv,
-          miHsFile     = hsFile
+          miValueTable = M.fromList newValueEnv
+          -- miHsFile     = hsFile
           }
 
     newMod' <- case exports of
