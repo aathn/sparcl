@@ -80,11 +80,6 @@ instance Pretty ConTy where
                else hsep [ text "forall", hsep (map ppr xs) <> text "." ] <> align d
     in hd $ foldr (\a r -> pprPrec 1 a <+> text "-o" <+> r) (ppr ty) args
 
-conTy2Ty :: ConTy -> Ty
-conTy2Ty (ConTy xs argTy retTy) =
-  let t = foldr (-@) retTy argTy
-  in TyForAll xs (TyQual [] t)
-
 instance MultiplicityLike Ty where
   one   = TyMult One
   omega = TyMult Omega

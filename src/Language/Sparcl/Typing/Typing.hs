@@ -10,6 +10,7 @@ import           Data.Void
 -- import Control.Monad.Writer
 
 import qualified Data.Map                       as M
+import           Data.Maybe                     (isJust)
 
 import           Control.Arrow                  (first, (***))
 import qualified Data.Graph                     as G
@@ -139,17 +140,11 @@ checkPatsTy (p:ps) (m:ms) (t:ts) = do
   return (cs_p ++ cs_ps, p':ps', pbind ++ bind)
 checkPatsTy _ _ _ = error "Cannot happen."
 
-checkPatTy :: MonadTypeCheck m =>
-              LPat 'Renaming -> Multiplication -> MonoTy ->
-              m ([TyConstraint], LPat 'TypeCheck, [(Name, MonoTy, Multiplication)])
-checkPatTy = checkPatTyWork False
-
-checkPatTyWork ::
+checkPatTy ::
   MonadTypeCheck m =>
-  Bool ->
   LPat 'Renaming -> Multiplication -> MonoTy ->
   m ([TyConstraint], LPat 'TypeCheck, [(Name, MonoTy, Multiplication)])
-checkPatTyWork (Loc loc pat) pmult patTy = do
+checkPatTy (Loc loc pat) pmult patTy = do
   (cs, pat', bind) <- atLoc loc $ go pat
   return (cs, Loc loc pat', bind)
   where
@@ -157,13 +152,11 @@ checkPatTyWork (Loc loc pat) pmult patTy = do
       return ([], PVar (x, patTy), [(x,patTy, pmult)])
 
     go (PCon c ps) = do
-      ConTy xs ys q_ args_ ret_ <- askConType loc c
+      ConTy xs args_ ret_ <- askConType loc c
       uvars <- mapM (const newMetaTyVar) xs
-      evars <- mapM newSkolemTyVar ys
 
-      let tbl = zip xs (map TyMetaV uvars) ++ zip ys (map TyVar evars)
-      let q     = map (substTyC tbl) q_
-          args  = map (\(t,m) -> (substTy tbl t, substTy tbl m)) args_
+      let tbl = zip xs (map TyMetaV uvars)
+      let args  = map (substTy tbl) args_
           ret   = substTy tbl ret_
 
       unless (length ps == length args) $ do
@@ -175,19 +168,14 @@ checkPatTyWork (Loc loc pat) pmult patTy = do
 
       (cs, ps', bind) <-
         foldr (\(csj,pj',bindj) (cs, ps', bind) -> (csj++cs, pj':ps', bindj ++ bind)) ([],[],[]) <$>
-        zipWithM (\pj (tj, mj) -> do
-                    m <- ty2mult mj
-                    checkPatTyWork pj (lub m pmult) tj)
-                 ps
-                 args
+        zipWithM (\pj tj -> checkPatTy pj pmult tj) ps args
 
-      let tyOfC = foldr (\(t,m) r -> TyCon nameTyArr [m,t,r]) ret args
-      return (q++cs, PCon (c, tyOfC) ps', bind)
+      return (cs, PCon (c, ret) ps', bind)
 
 
     go (PWild x) = do -- this is only possible when pmult is omega
       -- tryUnify pmult (TyMult Omega)
-      ~(cs, Loc _ (PVar x'), _bind) <- checkPatTyWork (noLoc $ PVar x) omega patTy
+      ~(cs, Loc _ (PVar x'), _bind) <- checkPatTy (noLoc $ PVar x) omega patTy
       -- cs must be []
       addConstraint $ msubMult omega pmult
       return (cs, PWild x', [] )
@@ -587,13 +575,24 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
       return (Let1 p' e1' e2', mergeUseMap umap1 umap2')
 
 
+    go (Con c es) = do
+      ConTy xs args_ ret_ <- askConType loc c
+      uvars <- mapM (const newMetaTyVar) xs
 
+      let tbl = zip xs (map TyMetaV uvars)
+      let args  = map (substTy tbl) args_
+          ret   = substTy tbl ret_
 
-    go (Con c) = do
-      tyOfC <- askType loc c
-      t <- instantiate tyOfC
-      tryUnify t expectedTy
-      return (Con (c, t), M.empty)
+      unless (length es == length args) $ do
+        reportError $ Other $ hsep [ "Constructor", ppr c, "takes", ppr (length args), "arguments"
+                                   , "but here passed is",  ppr (length es)]
+        abortTyping
+
+      tryUnify ret expectedTy
+
+      es' <- zipWithM (\ej tj -> checkTy ej tj) es args
+
+      return (Con (c, ret) es')
 
     go (Sig e tySyn) = do
       let sigTy = ty2ty tySyn
@@ -631,23 +630,37 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
         liftTy tyA tyB =
           (tyA *-> tyB) *-> (tyB *-> tyA) *-> (tyA -@ tyB)
 
-    go Unlift = do
-      tyA <- newMetaTy
-      tyB <- newMetaTy
-      tryUnify (unliftTy tyA tyB) expectedTy
-      return (Unlift, M.empty)
-      where
-        unliftTy tyA tyB =
-          (revTy tyA -@ revTy tyB) *-> tupleTy [tyA *-> tyB, tyB *-> tyA]
+    go (RApp e1 e2) = do
+      (e1', ty1, umap1) <- inferTy e1
 
-    go RPin = do
-      tyA <- newMetaTy
-      tyB <- newMetaTy
-      tryUnify (pinTy tyA tyB) expectedTy
-      return (RPin, M.empty)
-        where
-          pinTy tyA tyB =
-            revTy tyA *-@ (tyA *-> revTy tyB) *-@ revTy (tupleTy [tyA, tyB])
+      argTy <- newMetaTy
+      resTy <- newMetaTy
+      atExp e1 $ atLoc (location e1) $ tryUnify (argTy -@ resTy) ty1
+
+      (e2', umap2) <- checkTy e2 resTy
+
+      tryUnify argTy expectedTy
+
+      return (RApp e1' e2', mergeUseMap umap1 umap2)
+
+    go (RPin p e1 e2) = do
+      qPat  <- newMetaTy
+      ty1 <- newMetaTy
+      ty2 <- newMetaTy
+
+      (e1', umap1) <- checkTyM e1 ty1 omega
+
+      ((e2', umap2), ~[p'], bind) <- checkPatsTyK [p] [omega] [ty1] $ do
+        checkTy e2 ty2
+
+      tryUnify (tupleTy [ty1, ty2]) expectedTy
+
+      let xqs = map (\(x,_,q) -> (x,q)) bind
+
+      constrainVars xqs umap2
+      let umap2' = foldr (M.delete . fst) umap2 xqs
+
+      return (RPin p' e1' e2', mergeUseMap umap1 umap2')
 
     go (Parens e) = do
       (e', umap) <- checkTy e expectedTy
@@ -675,7 +688,7 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
 
     go (Case e0 alts) = do
       p <- newMetaTyVar -- multiplicity of `e`
-      mul <- ty2mult (TyMetaV p)
+      let mul = if any (isJust . withExp . snd) alts then one else omega
 
       tyPat <- newMetaTy
       (e0', umap0)   <- {- withMultVar (TyMetaV p) $ -} checkTyM e0 tyPat mul

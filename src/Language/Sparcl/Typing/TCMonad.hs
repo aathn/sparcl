@@ -538,19 +538,15 @@ askConType loc n = do
 
 askType :: MonadTypeCheck m => SrcSpan -> Name -> m Ty
 askType l n = do
-  res <- askConTypeMaybe n
-  case res of
-    Just cty -> return (conTy2Ty cty)
-    Nothing  -> do
-      tyEnv <- C.asks (C.key @KeyTC) tcTyEnv
-      case M.lookup n tyEnv of
-        Just ty -> do
-          ty' <- zonkType ty
-          -- debugPrint 4 $ ppr n <+> text ":" <+> ppr ty'
-          return ty'
-        Nothing -> do
-          atLoc l (reportError $ Undefined n)
-          arbitraryTy
+  tyEnv <- C.asks (C.key @KeyTC) tcTyEnv
+  case M.lookup n tyEnv of
+    Just ty -> do
+      ty' <- zonkType ty
+      -- debugPrint 4 $ ppr n <+> text ":" <+> ppr ty'
+      return ty'
+    Nothing -> do
+      atLoc l (reportError $ Undefined n)
+      arbitraryTy
 
 newMetaTyVar :: MonadTypeCheck m => m MetaTyVar
 newMetaTyVar = do

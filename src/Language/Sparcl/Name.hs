@@ -16,16 +16,13 @@ instance Pretty NameBase where
   ppr (User n)   = text n
   ppr (System s) = ppr s
 
-data SystemName = NTuple !Int | KArrow | NArrow | NBang | NRev
+data SystemName = NTuple !Int | KArrow | NArrow
   deriving (Eq, Ord, Show)
 
 instance Pretty SystemName where
   ppr (NTuple n) = text "<Tup" <+> int n <> text ">"
   ppr NArrow     = text "->" -- NB: ternaly (Multiplicity -> Type -> Type -> Type) instead of binary
   ppr KArrow     = text "->"
-  ppr NBang      = text "!"  -- TODO: will be removed
-  ppr NRev       = text "rev"
-
 
 data SurfaceName
   = Qual !ModuleName !NameBase
@@ -149,12 +146,6 @@ nameUnit = nameTuple 0
 
 nameTyTuple :: Int -> Name
 nameTyTuple = nameTuple
-
-nameTyBang :: Name
-nameTyBang = nameInBase (System NBang)
-
-nameTyRev :: Name
-nameTyRev = nameInBase (System NRev)
 
 nameTyInt :: Name
 nameTyInt = nameInBase (User "Int")

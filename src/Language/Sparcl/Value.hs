@@ -16,7 +16,6 @@ import           Control.Monad.Fail
 data Value = VCon !Name ![Value]
            | VLit !Literal
            | VFun !(Value -> Eval Value)
-           | VRes !(Heap -> Eval Value) !(Value -> Eval Heap)
 
 newtype Eval a = MkEval (Reader Int a) deriving (Functor, Applicative, Monad, MonadReader Int, MonadFix)
 
@@ -33,8 +32,6 @@ instance NFData Value where
   rnf (VCon c vs) = rnf (c, vs)
   rnf (VLit l)    = rnf l
   rnf (VFun _)    = ()
-  rnf (VRes _ _)  = ()
-
 
 instance Pretty Value where
   pprPrec _ (VCon c []) = ppr c
@@ -43,8 +40,6 @@ instance Pretty Value where
 
   pprPrec _ (VLit l) = ppr l
   pprPrec _ (VFun _) = D.text "<function>"
-  pprPrec _ (VRes _ _) = D.text "<reversible computation>"
-
 
 -- type Eval = ReaderT Int (Either String)
 
@@ -56,8 +51,6 @@ lookupEnv n env = case M.lookup n env of
   Nothing -> rtError $ D.text "Undefined variable:" D.<+> ppr n
                        D.</> D.text "Searched through: " D.<+>
                        ppr (M.keys env)
-    -- -- if nothing, we treat the variable were reversible one.
-    -- return $ VRes (lookupEnvR n) (return . singletonEnv n)
   Just v  -> return v
 
 singletonEnv :: Name -> Value -> Env

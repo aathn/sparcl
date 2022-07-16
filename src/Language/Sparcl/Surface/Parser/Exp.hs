@@ -215,18 +215,13 @@ arrTy =
 
 appTy :: Monad m => P m (LTy 'Parsing)
 appTy =
-  P.try conTy <|> revTy <|> simpleTy
+  conTy <|> simpleTy
   where
     conTy = do
       Loc l c <- loc qconName
       sp
       ts <- P.some simpleTy
       return $ Loc (l <> mconcat (map location ts)) $ TCon c ts
-
-    revTy = loc $ do
-      void $ keyword "rev"
-      ty <- simpleTy
-      return $ TCon (BuiltIn nameTyRev) [ty]
 
 simpleTy :: Monad m => P m (LTy 'Parsing)
 simpleTy = getSrcLoc >>= \start ->
