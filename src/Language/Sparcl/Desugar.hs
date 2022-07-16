@@ -4,12 +4,10 @@ module Language.Sparcl.Desugar (
   runDesugar
   ) where
 
-import           Data.Function                  (on)
-import           Data.List                      (groupBy)
+import           Data.Maybe                     (isJust)
 import           Data.Void
 
 import           Control.Monad.Reader
-import           Control.Monad.State
 
 import           Language.Sparcl.SrcLoc
 import qualified Language.Sparcl.Surface.Syntax as S
@@ -19,12 +17,8 @@ import           Language.Sparcl.Name
 import qualified Language.Sparcl.Core.Syntax    as C
 import           Language.Sparcl.Pass
 import           Language.Sparcl.Typing.TCMonad
-import qualified Language.Sparcl.Typing.Type    as T
 
-import           Language.Sparcl.Pretty         hiding (list, (<$>))
 -- import Debug.Trace
-
-import           Language.Sparcl.DebugPrint
 
 type NameSource = Int -- de Brujin levels
 
@@ -46,10 +40,6 @@ withNewNames n k = do
 runDesugar :: MonadTypeCheck m => Desugar m a -> m a
 runDesugar m = runReaderT m 0
 
-numberOfArgs :: T.Ty -> Int
-numberOfArgs (T.TyCon n [_,_,t]) | n == nameTyArr = numberOfArgs t + 1
-numberOfArgs _                   = 0
-
 desugarExp :: forall m. MonadDesugar m => S.LExp 'TypeCheck -> m (C.Exp Name)
 desugarExp (Loc _ expr) = go expr
   where
@@ -58,7 +48,7 @@ desugarExp (Loc _ expr) = go expr
     go (S.Var (x, _)) = return $ C.Var x
     go (S.Lit l)      = return $ C.Lit l
     go (S.App e1 e2)  =
-      mkApp <$> desugarExp e1 <*> desugarExp e2
+      C.App <$> desugarExp e1 <*> desugarExp e2
 
     go (S.Abs ps e) = desugarRHS [(ps, S.Clause e (S.HDecls () []) Nothing)]
 
@@ -67,8 +57,14 @@ desugarExp (Loc _ expr) = go expr
 
     go (S.Case e alts) = do
       e'  <- desugarExp e
-      rs' <- desugarAlts alts
-      return (C.Case e' rs')
+      let (ps, cs) = unzip alts
+      ps' <- mapM desugarPat ps
+      if any (isJust . S.withExp) cs then do
+        alts' <- zipWith (\p (e1,e2) -> (p,e1,e2)) ps' <$> mapM convertClauseR cs
+        return $ C.RCase e' alts'
+      else do
+        alts' <- zip ps' <$> mapM convertClauseU cs
+        return $ C.Case e' alts'
 
     go S.Lift =
       withNewNames 2 $ \[x, y] ->
@@ -87,7 +83,11 @@ desugarExp (Loc _ expr) = go expr
                           return (n, ty, r)) bs
           return $ C.Let bs' e'
 
-    go (S.Let1 p1 e1 e2) = go (S.App (noLoc (S.Abs [p1] e2)) e1)
+    go (S.Let1 p1 e1 e2) = do
+      p1' <- desugarPat p1
+      e1' <- desugarExp e1
+      e2' <- desugarExp e2
+      return $ C.Case e1' [(p1', e2')]
 
     go (S.Parens e) = desugarExp e
 
@@ -100,115 +100,42 @@ desugarExp (Loc _ expr) = go expr
       C.RApp <$> desugarExp e1 <*> desugarExp e2
 
     go (S.RPin p1 e1 e2) = withNewName $ \n -> do
-      r <- desugarAlts [(p1, S.Clause (noLoc e2) (S.HDecls () []) Nothing)]
-      return $ C.RPin n e1 (makeCase (C.Var n) r)
+      p1' <- desugarPat p1
+      e1' <- desugarExp e1
+      e2' <- desugarExp e2
+      return $ C.RPin n e1' (C.Case (C.Var n) [(p1',e2')])
 
 
 makeTupleExpC :: [C.Exp Name] -> C.Exp Name
 makeTupleExpC [e] = e
 makeTupleExpC es  = C.Con (nameTuple (length es)) es
 
-makeTuplePatS :: [S.LPat 'TypeCheck] -> S.LPat 'TypeCheck
-makeTuplePatS [p] = p
-makeTuplePatS ps  = noLoc (S.PCon (nameTuple len, T.conTy2Ty $ tupleConTy len) ps)
-  where
-    len = length ps
-
 makeTuplePatC :: [C.Pat Name] -> C.Pat Name
 makeTuplePatC [p] = p
 makeTuplePatC ps  = C.PCon (nameTuple (length ps)) ps
 
-makeCase :: Ord n => C.Exp n -> [(C.Pat n, C.Exp n)] -> C.Exp n
-makeCase (C.Con n []) [(C.PCon m [], e)] | n == m = e
-makeCase e0 [(C.PVar x, e)]              = mkApp (mkAbs x e) e0
-makeCase e0 alts                         = C.Case e0 alts
-
-
--- Removes apparent eta-redex.
-mkAbs :: Ord n => n -> C.Exp n -> C.Exp n
-mkAbs n (C.App e (C.Var m)) | n == m && n `notElem` C.freeVars e = e
-mkAbs n e                   = C.Abs n e
-
-mkApp :: C.Exp n -> C.Exp n -> C.Exp n
-mkApp e1 e2 = C.App e1 e2
-
--- data CheckSubst a = Substituted a
---                   | Untouched   a
---                   deriving Functor
-
-
 desugarRHS :: MonadDesugar m => [([S.LPat 'TypeCheck], S.Clause 'TypeCheck)] -> m (C.Exp Name)
 desugarRHS pcs = withNewNames len $ \ns -> do
-  let e0 = makeTupleExpC [C.Var n | n <- ns]
-  let alts = map (\(ps, c) -> (makeTuplePatS ps, c)) pcs
-  alts' <- desugarAlts alts
-  return $ foldr C.Abs (makeCase e0 alts') ns
+  let (pps, cs) = unzip pcs
+  pps' <- mapM (mapM desugarPat) pps
+  body <-
+    if any (isJust . S.withExp) cs then do
+      let e0 = makeTupleExpC [C.Var n | n <- tail ns]
+          (psU, psR) = unzip $ map (\ps -> (makeTuplePatC (init ps), last ps)) pps'
+      cs' <- mapM convertClauseR cs
+      let altsR = zipWith (\p (e1,e2) -> (p,e1,e2)) psR cs'
+          altsU = map (,C.RCase (C.Var $ head ns) altsR) psU
+      return $ C.Case e0 altsU
+    else do
+      let e0 = makeTupleExpC [C.Var n | n <- ns]
+          ps = map makeTuplePatC pps'
+      cs' <- mapM convertClauseU cs
+      return $ C.Case e0 (zip ps cs')
+  return $ foldr C.Abs body ns
   where
     len = case pcs of
             []       -> 0
             (ps,_):_ -> length ps
-
-data CPat = CPHole
-          | CPVar  !Name
-          | CPCon  !Name ![ CPat ]
---          | CPBang CPat
-          deriving (Eq , Show)
-
-
-instance Pretty CPat where
-  pprPrec _ CPHole    = text "_"
-  pprPrec _ (CPVar n) = ppr n
-  pprPrec _ (CPCon n []) = ppr n
-  pprPrec k (CPCon n ps) = parensIf (k > 0) $ ppr n <+> hsep (map (pprPrec 1) ps)
---  pprPrec _ (CPBang p)   = text "!" <> pprPrec 1 p
-
-
-
--- | 'separatePat' separate a unidirectional pattern from a pattern.
---   For example, for a patter @Cons a (rev b)@, it returns
---   @Cons a _@ and @[b]@. Extracted reversible patterns are ordered
---   from left-to-right. For example, for @Cons (rev a) (rev b)@
---   it generates @Cons _ _@ and @[a,b]@.
-separatePat :: S.LPat 'TypeCheck -> (CPat, [S.LPat 'TypeCheck])
-separatePat pat = go False (unLoc pat)
-  where
-    go _ (S.PVar (x, _ty)) = (CPVar x, [])
-    go b (S.PCon (c, _ty) ps) =
-      let (ps', subs) = gos b ps
-      in (CPCon c ps', subs)
-
-    go _ (S.PREV p)  = (CPHole, [p])
-    go _ (S.PWild (x, _ty)) =
-      -- (if b then CPVar x else CPBang (CPVar x), [])
-      (CPVar x, [])
-    -- go _ (S.PBang p) =
-    --   let (p', subs) = go True (unLoc p)
-    --   in (CPBang p', subs)
-
-    gos _ []       = ([], [])
-    gos b (p:ps) =
-      let (p', subsP) = go b (unLoc p)
-          (ps', subsPs) = gos b ps
-      in (p':ps', subsP ++ subsPs)
-
-{- |
-'fillCPat' does the opposite of 'separatePat', but it generates
-'C.Pat' instead of 'S.Pat'.
--}
-fillCPat :: CPat -> [C.Pat Name] -> C.Pat Name
-fillCPat = evalState . go
-  where
-    next :: State [C.Pat Name] (C.Pat Name)
-    next = do
-      ~(p:ps) <- get -- lazy pattern to avoid requiring MonadFail Identity.
-      put ps
-      return p
-
-    go :: CPat -> State [C.Pat Name] (C.Pat Name)
-    go (CPVar x)    = return (C.PVar x)
-    go (CPCon c ps) = C.PCon c <$> mapM go ps
---    go (CPBang p)   = C.PBang <$> go p
-    go CPHole       = next
 
 convertClauseU :: MonadDesugar m => S.Clause 'TypeCheck -> m (C.Exp Name)
 convertClauseU (S.Clause body ws Nothing) =
@@ -225,45 +152,6 @@ convertClauseR (S.Clause body ws wi) = do
   where
     generateWithExp _ = withNewName $ \n ->
       return $ C.Abs n $ C.Con conTrue []
-    -- generateWithExp _ = withNewName $ \n -> withNewName $ \n' ->
-    --   -- FIXME: more sophisticated with-exp generation.
-    --   return $ C.Bang $ C.Abs n $ C.Case (C.Var n) [ (C.PBang (C.PVar n'), C.Con conTrue []) ]
-
-desugarAlts :: forall m. MonadDesugar m => [(S.LPat 'TypeCheck, S.Clause 'TypeCheck)] -> m [(C.Pat Name, C.Exp Name)]
-desugarAlts alts = do
-  let alts' = map (\(p,c) ->
-                      let (cp, subs) = separatePat p
-                      in (cp, subs, c)) alts
-  -- grouping alts that have the same unidir patterns.
-  debugPrint 3 $ text "Common patterns:" <+> ppr [ cp | (cp, _, _) <- alts' ]
-  let altss = groupBy ((==) `on` (\(cp,_,_) -> cp)) alts'
-  mapM makeBCases altss
-  where
-    makeBCases :: [ (CPat, [S.LPat 'TypeCheck], S.Clause 'TypeCheck) ] -> m (C.Pat Name, C.Exp Name)
-    makeBCases [] = error "Cannot happen"
-    makeBCases ((cp, [], c):_) = do
-          -- In this case, the original pattern does not have any REV.
-          -- so @length ralts > 1@ means that thare are some redundant patterns.
-          -- TOOD: say warning.
-
-          let p = fillCPat cp []
-          e <- convertClauseU c
-          return (p, e)
-    makeBCases ralts@((cp, firstSub, _):_) =
-          -- Notice that all @cp@ and @length sub@ are the same in @ralts@.
-          withNewNames len $ \xs -> do
-            let outP = fillCPat cp [C.PVar x | x <- xs]
-            let re0 = makeTupleExpC [ C.Var x | x <- xs ]
-
-            pes <- forM ralts $ \(_, sub, c) -> do
-              sub' <- mapM desugarPat sub
-              let rp = makeTuplePatC sub'
-              (re, rw) <- convertClauseR c
-              return (rp, re, rw)
-            return (outP, C.RCase re0 pes)
-     where
-       len = length firstSub
-
 
 desugarPat :: MonadDesugar m => S.LPat 'TypeCheck -> m (C.Pat Name)
 desugarPat = go . unLoc
