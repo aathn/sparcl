@@ -205,16 +205,16 @@ evalCaseF env v0 alts = go [] alts
           go (ch:checker) pes
         Just binds ->
           let vres = evalF (extendsEnv binds env) e
-              !()  = checkAssert ch checker vres
+              !()  = checkAssert p ch checker vres
           in vres
 
-    checkAssert :: Exp Name -> [Exp Name] -> Value -> ()
-    checkAssert ch checker res =
+    checkAssert :: Pat Name -> Exp Name -> [Exp Name] -> Value -> ()
+    checkAssert p ch checker res =
       let v  = mkValBool (mkValFun (evalF env ch) res)
           vs = map (\c -> mkValBool (mkValFun (evalF env c) res)) checker
       in
         if (not v || or vs) then
-          rtError $ text "Assertion failed (fwd)"
+          rtError $ text "Assertion failed (fwd) on case " <> ppr p
         else
           ()
 
@@ -237,8 +237,9 @@ evalCaseB env vres e0 alts =
         let env1 = evalB env vres e
             xs = freeVarsP p
             v0 = fillPat p $ zip xs (map (\x -> lookupEnvStrict x env1) xs)
-            !() = if any ($ v0) checker then () else
-                    rtError $ text "Assertion failed (bwd)"
+            !() = if any ($ v0) checker then
+                    rtError $ text "Assertion failed (bwd) on case " <> ppr p
+                  else ()
         in
           (v0, removesEnv xs env1)
       else
