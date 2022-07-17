@@ -19,7 +19,7 @@ evalFBind env ds =
     in env'
 
 mkValFun :: Value -> Value -> Value
-mkValFun (VFun (env, n, e)) v = evalF (extendEnv n v env) e
+mkValFun (VFun env n e) v = evalF (extendEnv n v env) e
 mkValFun (VOp f) v = f v
 mkValFun (VLift f _) v = f v
 mkValFun vf _ =
@@ -45,7 +45,7 @@ evalF env expr = case expr of
       mkValFun v1 v2
 
   Abs n e ->
-    VFun (env, n, e)
+    VFun env n e
 
   Con q es ->
     VCon q $ map (evalF env) es
@@ -73,7 +73,7 @@ evalF env expr = case expr of
         v2 = evalF env e2
     in
       case v1 of
-       VFun (env', n, e) -> evalF (extendEnv n v2 env') e
+       VFun env' n e -> evalF (extendEnv n v2 env') e
        VLift f _ -> f v2
        _ ->
          rtError $ text "expected a reversible function, but found " <> ppr v1
@@ -83,7 +83,7 @@ evalF env expr = case expr of
         v2 = evalF env e2
     in
       case v1 of
-       VFun (env', n, e) ->
+       VFun env' n e ->
          let res = evalB env' v2 e
          in lookupEnvStrict n res
        VLift _ g -> g v2
@@ -113,7 +113,7 @@ evalB env v expr = case expr of
 
   Abs n e ->
     case v of
-      VFun (_, n', _) | n == n' ->
+      VFun _ n' _ | n == n' ->
                          emptyEnv
       _ ->
         rtError $ text "mismatching lambdas during backwards evaluation: " <>
@@ -145,7 +145,7 @@ evalB env v expr = case expr of
     let v1 = evalF env e1
         v2 =
           case v1 of
-            VFun (env', n, e) ->
+            VFun env' n e ->
               lookupEnvStrict n (evalB env' v e)
             VLift _ g ->
               g v
@@ -158,7 +158,7 @@ evalB env v expr = case expr of
     let v1 = evalF env e1
         v2 =
           case v1 of
-            VFun (env', n, e) ->
+            VFun env' n e ->
               evalF (extendEnv n v env') e
             VLift f _ ->
               f v
