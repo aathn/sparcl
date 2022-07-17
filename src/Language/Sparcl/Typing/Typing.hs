@@ -630,7 +630,20 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
         liftTy tyA tyB =
           (tyA *-> tyB) *-> (tyB *-> tyA) *-> (tyA -@ tyB)
 
-    go (RApp e1 e2) = do
+    go (FApp e1 e2) = do
+      (e1', ty1, umap1) <- inferTy e1
+
+      argTy <- newMetaTy
+      resTy <- newMetaTy
+      atExp e1 $ atLoc (location e1) $ tryUnify (argTy -@ resTy) ty1
+
+      (e2', umap2) <- checkTy e2 argTy
+
+      tryUnify resTy expectedTy
+
+      return (FApp e1' e2', mergeUseMap umap1 umap2)
+
+    go (BApp e1 e2) = do
       (e1', ty1, umap1) <- inferTy e1
 
       argTy <- newMetaTy
@@ -641,7 +654,7 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
 
       tryUnify argTy expectedTy
 
-      return (RApp e1' e2', mergeUseMap umap1 umap2)
+      return (BApp e1' e2', mergeUseMap umap1 umap2)
 
     go (RPin p e1 e2) = do
       ty1 <- newMetaTy

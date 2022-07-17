@@ -96,8 +96,11 @@ desugarExp (Loc _ expr) = go expr
       e2' <- desugarExp e2
       return $ C.App (C.App (C.Var op) e1') e2'
 
-    go (S.RApp e1 e2)  =
-      C.RApp <$> desugarExp e1 <*> desugarExp e2
+    go (S.FApp e1 e2)  =
+      C.FApp <$> desugarExp e1 <*> desugarExp e2
+
+    go (S.BApp e1 e2)  =
+      C.BApp <$> desugarExp e1 <*> desugarExp e2
 
     go (S.RPin p1 e1 e2) = withNewName $ \n -> do
       p1' <- desugarPat p1

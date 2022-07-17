@@ -8,144 +8,184 @@ import           Language.Sparcl.Value
 
 import           Control.Monad.Except
 import           Data.Maybe                  (fromMaybe)
--- import Control.Monad.State
 
--- import qualified Control.Monad.Fail as Fail
-
--- import Control.Monad.State
-
--- import qualified Control.Monad.Fail as Fail
-import           Control.Monad.Reader        (MonadReader (local), ask)
 -- import           Debug.Trace                 (trace)
 import           Language.Sparcl.Pretty      hiding ((<$>))
 
--- lookupEnvR :: QName -> Env -> Eval Value
--- lookupEnvR n env = case M.lookup n env of
---   Nothing -> throwError $ "Undefined value: " ++ show n
---   Just  v -> return v
+evalFBind :: Env -> Bind Name -> Env
+evalFBind env ds =
+    let ev   = map (\(n,_,e) -> (n, evalF env' e)) ds
+        env' = extendsEnv ev env
+    in env'
 
+mkValFun :: Value -> Value -> Value
+mkValFun (VFun (env, n, e)) v = evalF (extendEnv n v env) e
+mkValFun (VOp f) v = f v
+mkValFun (VLift f _) v = f v
+mkValFun vf _ =
+  rtError $ text "expected a function, but found " <> ppr vf
 
-evalUBind :: Env -> Bind Name -> Eval Env
-evalUBind env ds = do
-    rec ev  <- mapM (\(n,_,e) -> do
-                        v <- evalU env' e
-                        return (n,v)) ds
-        let env' = extendsEnv ev env
-    return env'
+mkValBool :: Value -> Bool
+mkValBool v =
+  case v of
+    VCon c [] | c == conTrue -> True
+    VCon c [] | c == conFalse -> False
+    _ -> rtError $ text "expected bool but found " <> ppr v
 
-evalU :: Env -> Exp Name -> Eval Value
-evalU env expr = case expr of
-  Lit l -> return $ VLit l
+evalF :: Env -> Exp Name -> Value
+evalF env expr = case expr of
+  Lit l -> VLit l
   Var n ->
-    lookupEnv n env
-  App e1 e2 -> do
-    v1 <- evalU env e1
-    case v1 of
-      VFun f -> do
-        v2 <- evalU env e2
-        f v2
-      _ ->
-        rtError $ text "the first component of application must be a function, but we got " <> ppr v1 <> text " from " <> ppr e1
+    lookupEnvStrict n env
+
+  App e1 e2 ->
+    let v1 = evalF env e1
+        v2 = evalF env e2
+    in
+      mkValFun v1 v2
+
   Abs n e ->
-    return $ VFun (\v -> evalU (extendEnv n v env) e)
+    VFun (env, n, e)
 
   Con q es ->
-    VCon q <$> mapM (evalU env) es
+    VCon q $ map (evalF env) es
 
-  Case e0 pes -> do
-    v0 <- evalU env e0
-    evalCase env v0 pes
+  Case e0 pes ->
+    let v0 = evalF env e0
+    in evalCase evalF env v0 pes
 
-  Lift ef eb -> do
-    VFun vf <- evalU env ef
-    VFun vb <- evalU env eb
-    return $ VFun $ \(VRes f b) -> return $ VRes (f >=> vf) (vb >=> b)
-    -- VBang (VFun vf) <- evalU env ef
-    -- VBang (VFun vb) <- evalU env eb
-    -- let vf' = vf . VBang
-    -- let vb' = vb . VBang
-    -- return $ VBang $ VFun $ \(VRes f b) ->
-    --                           return $ VRes (f >=> vf') (vb' >=> b)
+  RCase e0 pes ->
+    let v0 = evalF env e0
+    in evalCaseF env v0 pes
 
-  Let ds e -> do
-    env' <- evalUBind env ds
-    evalU env' e
+  Lift ef eb ->
+    let v1 = evalF env ef
+        v2 = evalF env eb
+    in
+      VLift (mkValFun v1) (mkValFun v2)
 
-  Unlift e -> do
-    -- VBang (VFun f) <- evalU env e
-    VFun f <- evalU env e
-    newAddr $ \a -> do
-      VRes f0 b0 <- f (VRes (lookupHeap a)
-                            (return . singletonHeap a))
-      let f0' v = f0 (singletonHeap a v)
-      let b0' v = do hp <- b0 v
-                     lookupHeap a hp
-      -- let f0' (VBang v) = f0 (singletonHeap a v)
-      --     f0' _         = error "expecting !"
-      -- let b0' (VBang v) = do hp <- b0 v
-      --                        lookupHeap a hp
-      --     b0' _         = error "expecting !"
-      let c = nameTuple 2
-      -- return $ VCon c [VBang (VFun f0'), VBang (VFun b0')]
-      return $ VCon c [VFun f0', VFun b0']
+  Let ds e ->
+    let env' = evalFBind env ds
+    in evalF env' e
 
+  FApp e1 e2 ->
+    let v1 = evalF env e1
+        v2 = evalF env e2
+    in
+      case v1 of
+       VFun (env', n, e) -> evalF (extendEnv n v2 env') e
+       VLift f _ -> f v2
+       _ ->
+         rtError $ text "expected a reversible function, but found " <> ppr v1
 
-  RCon q es -> do
-    vs <- mapM (evalU env) es
-    return $ VRes (\heap -> do
-                      us <- mapM (\v -> runFwd v heap) vs
-                      return $ VCon q us)
-                  (\v' ->
-                     case v' of
-                       VCon q' us' | q == q' && length us' == length es -> do
-                                       envs <- zipWithM runBwd vs us'
-                                       return $ foldr unionHeap emptyHeap envs
-                       _ ->
-                         rtError $ text "out of the range:" <+> ppr v' <+> text "for" <+> ppr expr)
+  BApp e1 e2 ->
+    let v1 = evalF env e1
+        v2 = evalF env e2
+    in
+      case v1 of
+       VFun (env', n, e) ->
+         let res = evalB env' v2 e
+         in lookupEnvStrict n res
+       VLift _ g -> g v2
+       _ ->
+         rtError $ text "expected a reversible function, but found " <> ppr v1
 
-  RCase e0 pes -> do
-    VRes f0 b0 <- evalU env e0
-    pes' <- mapM (\(p,e,e') -> do
-                     -- VBang (VFun ch) <- evalU env e'
-                     VFun ch <- evalU env e'
-                     let ch' v = do
-                           res <- ch v
-                           case res of
-                             VCon q [] | q == conTrue -> return True
-                             _                        -> return False
-                     return (p, e, ch')) pes
-    lvl <- ask
-    return $ VRes (\hp -> local (const lvl) $ evalCaseF env hp f0 pes')
-                  (\v  -> local (const lvl) $ evalCaseB env v b0 pes')
+  RPin n e1 e2 ->
+    let v1 = evalF env e1
+        v2 = evalF (extendEnv n v1 env) e2
+        c = nameTuple 2
+    in
+      VCon c [v1, v2]
 
 
-  RPin e1 e2 -> do
-    VRes f1 b1 <- evalU env e1
-    VFun h     <- evalU env e2
+evalB :: Env -> Value -> Exp Name -> Env
+evalB env v expr = case expr of
+  Var n ->
+    case lookupEnv n env of
+      Nothing -> singletonEnv n v
+      Just _ -> emptyEnv
+
+  Lit _ ->
+    emptyEnv
+
+  App _ _  ->
+    emptyEnv
+
+  Abs n e ->
+    case v of
+      VFun (_, n', _) | n == n' ->
+                         emptyEnv
+      _ ->
+        rtError $ text "mismatching lambdas during backwards evaluation: " <>
+                   ppr (Abs n e) <> text " =/= " <> ppr v
+
+  Con q es ->
+    case v of
+      VCon q' vs | q == q' ->
+                     foldl unionEnv emptyEnv $ zipWith (evalB env) vs es
+      _ ->
+        rtError $ text "mismatching constructors during backwards evaluation: " <>
+                   ppr (Con q es) <> text " =/= " <> ppr v
+
+  Case e0 pes ->
+    let v0 = evalF env e0
+    in evalCase (\env' e -> evalB env' v e) env v0 pes
+
+  RCase e0 pes ->
+    evalCaseB env v e0 pes
+
+  Lift _ _ ->
+    emptyEnv
+
+  Let ds e ->
+    let env' = evalFBind env ds
+    in evalB env' v e
+
+  FApp e1 e2 ->
+    let v1 = evalF env e1
+        v2 =
+          case v1 of
+            VFun (env', n, e) ->
+              lookupEnvStrict n (evalB env' v e)
+            VLift _ g ->
+              g v
+            _ ->
+              rtError $ text "expected a reversible function, but found " <> ppr v1
+    in
+      evalB env v2 e2
+
+  BApp e1 e2 ->
+    let v1 = evalF env e1
+        v2 =
+          case v1 of
+            VFun (env', n, e) ->
+              evalF (extendEnv n v env') e
+            VLift f _ ->
+              f v
+            _ ->
+              rtError $ text "expected a reversible function, but found " <> ppr v1
+    in
+      evalB env v2 e2
+
+  RPin n e1 e2 ->
     let c = nameTuple 2
-    return $ VRes (\hp -> do
-                      a <- f1 hp
-                      VRes f2 _ <- h a -- (VBang a)
-                      b <- f2 hp
-                      return $ VCon c [a, b])
-                  (\case
-                      VCon c' [a,b] | c' == c -> do
-                                        VRes _ b2 <- h a -- (VBang a)
-                                        hp2 <- b2 b
-                                        hp1 <- b1 a
-                                        return $ unionHeap hp1 hp2
-                      _ -> rtError $ text "Expected a pair"
-                  )
+        (v1,v2) =
+          case v of
+            VCon c' [x, y] | c == c' -> (x, y)
+            _ ->
+              rtError $ text "expected a tuple, but found " <> ppr v
+        env1 = evalB env v1 e1
+        env2 = evalB (extendEnv n v1 env) v2 e2
+    in
+      unionEnv env1 env2
 
 
-
-
-evalCase :: Env -> Value -> [ (Pat Name, Exp Name) ] -> Eval Value
-evalCase _   v [] = rtError $ text "pattern match error" <+> ppr v
-evalCase env v ((p, e):pes) =
+evalCase :: (Env -> Exp Name -> a) -> Env -> Value -> [ (Pat Name, Exp Name) ] -> a
+evalCase _    _   v [] = rtError $ text "pattern match error" <+> ppr v
+evalCase eval env v ((p, e):pes) =
   case findMatch v p of
-    Just binds -> evalU (extendsEnv binds env) e
-    _          -> evalCase env v pes
+    Just binds -> eval (extendsEnv binds env) e
+    _          -> evalCase eval env v pes
 
 findMatch :: Value -> Pat Name -> Maybe [ (Name, Value) ]
 findMatch v (PVar n) = return [(n, v)]
@@ -153,42 +193,38 @@ findMatch (VCon q vs) (PCon q' ps) | q == q' && length vs == length ps =
                                        concat <$> zipWithM findMatch vs ps
 findMatch _ _ = Nothing
 
-evalCaseF :: Env -> Heap -> (Heap -> Eval Value) -> [ (Pat Name, Exp Name, Value -> Eval Bool) ] -> Eval Value
-evalCaseF env hp f0 alts = do
-  v0 <- f0 hp
-  go v0 [] alts
+
+evalCaseF :: Env -> Value -> [ (Pat Name, Exp Name, Exp Name) ] -> Value
+evalCaseF env v0 alts = go [] alts
   where
-    go :: Value -> [Value -> Eval Bool] -> [ (Pat Name, Exp Name, Value -> Eval Bool) ] -> Eval Value
-    go v0  _       [] = rtError $ text $ "pattern match failure (fwd): " ++ prettyShow v0
-    go v0 checker ((p,e,ch) : pes) =
+    go :: [Exp Name] -> [ (Pat Name, Exp Name, Exp Name) ] -> Value
+    go _       [] = rtError $ text "pattern match failure (fwd): " <> ppr v0
+    go checker ((p,e,ch) : pes) =
       case findMatch v0 p of
         Nothing ->
-          go v0 (ch:checker) pes
+          go (ch:checker) pes
         Just binds ->
-          newAddrs (length binds) $ \as -> do
-             let hbinds = zipWith (\a (_, v) -> (a, v)) as binds
-             let binds' = zipWith (\a (x, _) ->
-                                     (x, VRes (lookupHeap a) (return . singletonHeap a))) as binds
-             VRes f _ <- evalU (extendsEnv binds' env) e
-             res <- f (foldr (uncurry extendHeap) hp hbinds)
-             checkAssert ch checker res
+          let vres = evalF (extendsEnv binds env) e
+              !()  = checkAssert ch checker vres
+          in vres
 
-    checkAssert :: (Value -> Eval Bool) -> [Value -> Eval Bool] -> Value -> Eval Value
-    checkAssert ch checker res = do
-      -- v  <- ch (VBang res)
-      -- vs <- mapM (\c -> c (VBang res)) checker
-      v <- ch res
-      vs <- mapM (\c -> c res) checker
-      () <- unless (v && not (or vs)) $
-               rtError (text "Assertion failed (fwd)")
-      return res
+    checkAssert :: Exp Name -> [Exp Name] -> Value -> ()
+    checkAssert ch checker res =
+      let v  = mkValBool (mkValFun (evalF env ch) res)
+          vs = map (\c -> mkValBool (mkValFun (evalF env c) res)) checker
+      in
+        if (not v || or vs) then
+          rtError $ text "Assertion failed (fwd)"
+        else
+          ()
 
 
-evalCaseB :: Env -> Value -> (Value -> Eval Heap) -> [ (Pat Name, Exp Name, Value -> Eval Bool) ] -> Eval Heap
-evalCaseB env vres b0 alts = do
-  (v, hp) <- go [] alts
-  hp' <- {- trace (show $ text "hp = " <> pprHeap hp <> comma <+> text "v = " <> ppr v) $ -} b0 v
-  return $ unionHeap hp hp'
+evalCaseB :: Env -> Value -> Exp Name -> [ (Pat Name, Exp Name, Exp Name) ] -> Env
+evalCaseB env vres e0 alts =
+  let (v, env1) = go [] alts
+      env2      = evalB env v e0
+  in
+    unionEnv env1 env2
   where
     mkAssert :: Pat Name -> Value -> Bool
     mkAssert p v = case findMatch v p of
@@ -196,22 +232,17 @@ evalCaseB env vres b0 alts = do
                      _      -> False
 
     go _ [] = rtError $ text "pattern match failure (bwd)"
-    go checker ((p,e,ch):pes) = do
-      -- flg <- ch (VBang vres)
-      flg <- ch vres
-      if flg
-        then do
-          let xs = freeVarsP p
-          newAddrs (length xs) $ \as -> do
-            let binds' = zipWith (\x a ->
-                                    (x, VRes (lookupHeap a) (return . singletonHeap a))) xs as
-            VRes _ b <- {- trace ("Evaluating bodies") $ -} evalU (extendsEnv binds' env) e
-            hpBr <- {- trace ("vres = " ++ show (ppr vres)) $ -} b vres
-            v0 <- {- trace ("hpBr = " ++ show (pprHeap hpBr)) $ -} fillPat p <$> zipWithM (\x a -> (x,) <$> lookupHeap a hpBr) xs as
-            unless (any ($ v0) checker) $
-              rtError $ text "Assertion failed (bwd)"
-            return (v0, removesHeap as hpBr)
-        else go (mkAssert p:checker) pes
+    go checker ((p,e,ch):pes) =
+      if mkValBool (mkValFun (evalF env ch) vres) then
+        let env1 = evalB env vres e
+            xs = freeVarsP p
+            v0 = fillPat p $ zip xs (map (\x -> lookupEnvStrict x env1) xs)
+            !() = if any ($ v0) checker then () else
+                    rtError $ text "Assertion failed (bwd)"
+        in
+          (v0, removesEnv xs env1)
+      else
+        go (mkAssert p:checker) pes
 
     fillPat :: Pat Name -> [ (Name, Value) ] -> Value
     fillPat (PVar n) bs =
@@ -219,14 +250,4 @@ evalCaseB env vres b0 alts = do
 
     fillPat (PCon c ps) bs =
       VCon c (map (flip fillPat bs) ps)
-
-
-runFwd :: Value -> Heap -> Eval Value
-runFwd (VRes f _) = f
-runFwd _          = \_ -> rtError $ text "expected a reversible comp."
-
-runBwd :: Value -> Value -> Eval Heap
-runBwd (VRes _ b) = b
-runBwd _          = \_ -> rtError $ text "expected a reversible comp."
-
 

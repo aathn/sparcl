@@ -191,7 +191,8 @@ data Exp p
   | Parens !(LExp p) -- for operators
   | Op  !(XId p) !(LExp p) !(LExp p)
 
-  | RApp !(LExp p) !(LExp p)
+  | FApp !(LExp p) !(LExp p)
+  | BApp !(LExp p) !(LExp p)
   | RPin !(LPat p) !(LExp p) !(LExp p)
 
 
@@ -240,8 +241,11 @@ instance AllPretty p => Pretty (Exp p) where
     D.text "let" D.<+> D.align (ppr p <+> text "<-" <+> ppr e1 <+> D.text "in") D.</>
     pprPrec 0 e2
 
-  pprPrec k (RApp e1 e2) = parensIf (k > 9) $
-    pprPrec 9 e1 D.<+> D.text "%" D.<+> pprPrec 10 e2
+  pprPrec k (FApp e1 e2) = parensIf (k > 9) $
+    pprPrec 9 e1 D.<+> D.text "|>" D.<+> pprPrec 10 e2
+
+  pprPrec k (BApp e1 e2) = parensIf (k > 9) $
+    pprPrec 9 e1 D.<+> D.text "<|" D.<+> pprPrec 10 e2
 
   pprPrec k (RPin p e1 e2) = parensIf (k > 0) $ D.align $
     D.text "pin" D.<+> D.align (ppr p <+> text "<-" <+> ppr e1 <+> D.text "in") D.</>

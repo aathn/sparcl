@@ -178,10 +178,15 @@ renameExp level localnames (Loc loc expr) = first (Loc loc) <$> go expr
       return (unLoc e', S.insert n' fv)
 
 
-    go (RApp e1 e2) = do
+    go (FApp e1 e2) = do
       (e1', fv1) <- renameExp level localnames e1
       (e2', fv2) <- renameExp level localnames e2
-      return (RApp e1' e2', S.union fv1 fv2)
+      return (FApp e1' e2', S.union fv1 fv2)
+
+    go (BApp e1 e2) = do
+      (e1', fv1) <- renameExp level localnames e1
+      (e2', fv2) <- renameExp level localnames e2
+      return (BApp e1' e2', S.union fv1 fv2)
 
     go (RPin p e1 e2) = do
       (e1', fv1) <- renameExp level localnames e1
@@ -522,7 +527,7 @@ renamePat1 level localnames boundVars (Loc loc pat) cont =
 
     go (PWild _) k =
       let n'  = Alpha level (User "_")
-      in k (pure $ PWild n') [] (level + 1) localnames boundVars
+      in k (pure $ PVar n') [] (level + 1) localnames boundVars
 
     go (PCon c ps) k = do
       c' <- resolveImportedName loc c

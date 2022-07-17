@@ -310,23 +310,23 @@ baseModuleInfo = ModuleInfo {
           base "+" |-> intOp (+),
           base "-" |-> intOp (-),
           base "*" |-> intOp (*),
-          base "%" |-> (VOp $ \(VLit (LitInt n)) -> return $ VOp $ \(VLit (LitInt m)) -> return $ VLit (LitRational (fromIntegral n % fromIntegral m))),
+          base "%" |-> (VOp $ \(VLit (LitInt n)) -> VOp $ \(VLit (LitInt m)) -> VLit (LitRational (fromIntegral n % fromIntegral m))),
 
           base "+%" |-> ratOp (+),
           base "-%" |-> ratOp (-),
           base "*%" |-> ratOp (*),
           base "/%" |-> ratOp (/),
 
-          eqInt  |-> (VOp $ \n -> return $ VOp $ \m -> return $ fromBool $ ((==) `on` unInt ) n m),
-          leInt  |-> (VOp $ \n -> return $ VOp $ \m -> return $ fromBool $ ((<=) `on` unInt ) n m),
-          ltInt  |-> (VOp $ \n -> return $ VOp $ \m -> return $ fromBool $ ((<)  `on` unInt ) n m),
-          eqChar |-> (VOp $ \c -> return $ VOp $ \d -> return $ fromBool $ ((==) `on` unChar) c d),
-          leChar |-> (VOp $ \c -> return $ VOp $ \d -> return $ fromBool $ ((<=) `on` unChar) c d),
-          ltChar |-> (VOp $ \c -> return $ VOp $ \d -> return $ fromBool $ ((<)  `on` unChar) c d),
+          eqInt  |-> (VOp $ \n -> VOp $ \m -> fromBool $ ((==) `on` unInt ) n m),
+          leInt  |-> (VOp $ \n -> VOp $ \m -> fromBool $ ((<=) `on` unInt ) n m),
+          ltInt  |-> (VOp $ \n -> VOp $ \m -> fromBool $ ((<)  `on` unInt ) n m),
+          eqChar |-> (VOp $ \c -> VOp $ \d -> fromBool $ ((==) `on` unChar) c d),
+          leChar |-> (VOp $ \c -> VOp $ \d -> fromBool $ ((<=) `on` unChar) c d),
+          ltChar |-> (VOp $ \c -> VOp $ \d -> fromBool $ ((<)  `on` unChar) c d),
 
-          eqRational |-> (VOp $ \n -> return $ VOp $ \m -> return $ fromBool $ ((==) `on` unRat) n m),
-          leRational |-> (VOp $ \n -> return $ VOp $ \m -> return $ fromBool $ ((<=) `on` unRat) n m),
-          ltRational |-> (VOp $ \n -> return $ VOp $ \m -> return $ fromBool $ ((<)  `on` unRat) n m)
+          eqRational |-> (VOp $ \n -> VOp $ \m -> fromBool $ ((==) `on` unRat) n m),
+          leRational |-> (VOp $ \n -> VOp $ \m -> fromBool $ ((<=) `on` unRat) n m),
+          ltRational |-> (VOp $ \n -> VOp $ \m -> fromBool $ ((<)  `on` unRat) n m)
 
           ]
 
@@ -335,8 +335,8 @@ baseModuleInfo = ModuleInfo {
     fromBool True  = VCon conTrue  []
     fromBool False = VCon conFalse []
 
-    intOp f = VOp $ \(VLit (LitInt n)) -> return $ VOp $ \(VLit (LitInt m)) -> return (VLit (LitInt (f n m)))
-    ratOp f = VOp $ \(VLit (LitRational n)) -> return $ VOp $ \(VLit (LitRational m)) -> return (VLit (LitRational (f n m)))
+    intOp f = VOp $ \(VLit (LitInt n)) -> VOp $ \(VLit (LitInt m)) -> VLit (LitInt (f n m))
+    ratOp f = VOp $ \(VLit (LitRational n)) -> VOp $ \(VLit (LitRational m)) -> VLit (LitRational (f n m))
 
     rationalTy = TyCon (base "Rational") []
     intTy = TyCon (base "Int") []

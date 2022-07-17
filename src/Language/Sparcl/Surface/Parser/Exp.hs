@@ -377,9 +377,10 @@ fixityDecl = do
 opExpr :: Monad m => P m (LExp 'Parsing)
 opExpr =
   foldl (\a f -> f a)  <$>
-       funExpr <*> P.many ((rapp <|> lop) <*> funExpr)
+       funExpr <*> P.many ((fapp <|> bapp <|> lop) <*> funExpr)
   where
-    rapp = void (symbol "@") >> sp >> return (locFun RApp)
+    fapp = void (symbol "|>") >> sp >> return (locFun FApp)
+    bapp = void (symbol "<|") >> sp >> return (locFun BApp)
     lop = (locFun . Op) <$> qop <* sp
     locFun f e2 e1 = Loc (location e1 <> location e2) $ f e1 e2
 
@@ -422,24 +423,35 @@ funExpr = getSrcLoc >>= \startLoc ->
       e2 <- expr
       return $ Loc (startLoc <> location e2) $ RPin p e1 e2)
   <|>
-  appExpr
-  <|>
-  conApp
+  appExpr startLoc
 
-appExpr :: Monad m => P m (LExp 'Parsing)
-appExpr =
-  (\(f:fs) -> foldl lapp f fs) <$> P.some (withLoc simpleExpr)
+appExpr :: Monad m => SrcSpan -> P m (LExp 'Parsing)
+appExpr startLoc =
+  P.try conApp <|> funApp
   where
-    lapp :: Loc (Exp p) -> Loc (Exp p) -> Loc (Exp p)
+    conApp :: Monad m => P m (LExp 'Parsing)
+    conApp = do
+      c <- qconName
+      es <- P.many (withLoc simpleExprCon)
+      endLoc <- getSrcLoc
+      sp
+      return $ Loc (startLoc <> endLoc) $ Con c es
+
+    funApp :: Monad m => P m (LExp 'Parsing)
+    funApp = foldl lapp <$> simpleExpr startLoc <*> P.many (withLoc simpleExprCon)
+
+    lapp :: LExp p -> LExp p -> LExp p
     lapp e1 e2 = Loc (location e1 <> location e2) $ App e1 e2
 
-conApp :: Monad m => P m (LExp 'Parsing)
-conApp = do
-  startLoc <- getSrcLoc
-  c <- qconName
-  es <- P.some (withLoc simpleExpr)
-  endLoc <- getSrcLoc
-  return $ Loc (startLoc <> endLoc) $ Con c es
+simpleExprCon :: Monad m => SrcSpan -> P m (LExp 'Parsing)
+simpleExprCon startLoc =
+  P.try conExpr <|> simpleExpr startLoc
+  where
+    conExpr = do
+      c <- qconName
+      endLoc <- getSrcLoc
+      sp
+      return $ Loc (startLoc <> endLoc) $ Con c []
 
 simpleExpr :: Monad m => SrcSpan -> P m (LExp 'Parsing)
 simpleExpr startLoc =
