@@ -129,7 +129,7 @@ instance AllPretty p => Pretty (Ty p) where
     | isTyArr (Proxy :: Proxy p) c =
         let arr = case unLoc m of
                     TMult Omega -> line <> text "->"
-                    TMult One   -> line <> text "-o"
+                    TMult One   -> line <> text "<->"
                     _ -> text " " <> text "#" <+> ppr m D.<$> text "->"
         in parensIf (k > 0) $ D.group $ pprPrec 1 t1 <> arr <+> pprPrec 0 t2
   pprPrec k (TCon c ts) = parensIf  (k > 1) $ ppr c D.<+> D.hsep (map (pprPrec 2) ts)

@@ -71,14 +71,8 @@ testMonoTy t = Just t
 
 
 data ConTy = ConTy ![TyVar]        -- universal variables
-                   ![Ty]           -- constructor's arugument type
-                   !Ty             -- constructor's return types
-
-instance Pretty ConTy where
-  ppr (ConTy xs args ty) =
-    let hd d = if null xs then d
-               else hsep [ text "forall", hsep (map ppr xs) <> text "." ] <> align d
-    in hd $ foldr (\a r -> pprPrec 1 a <+> text "-o" <+> r) (ppr ty) args
+                   ![Ty]           -- constructor's argument types
+                   !Ty             -- constructor's return type
 
 instance MultiplicityLike Ty where
   one   = TyMult One
@@ -169,7 +163,7 @@ instance Pretty Ty where
   pprPrec _ (TyCon c []) = ppr c
   pprPrec k (TyCon c [m,a,b]) | c == nameTyArr = parensIf (k > 0) $
     case m of
-      TyMult One   -> D.group (D.align (pprPrec 1 a) D.<$> D.text "-o" D.<+> pprPrec 0 b)
+      TyMult One   -> D.group (D.align (pprPrec 1 a) D.<$> D.text "<->" D.<+> pprPrec 0 b)
       TyMult Omega -> D.group (D.align (pprPrec 1 a) D.<$> D.text "->" D.<+> pprPrec 0 b)
       _            -> D.group (D.align (pprPrec 1 a) <+> D.text "#" <+> pprPrec 0 m D.<$> text "->" <+> pprPrec 0 b)
 

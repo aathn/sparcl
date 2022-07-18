@@ -31,8 +31,8 @@ rightArrow = symbol "->" <|> symbol "→"
 leftArrow :: P m String
 leftArrow = symbol "<-" <|> symbol "←"
 
-lollipop :: P m String
-lollipop = symbol "-o" <|> symbol "⊸"
+lrArrow :: P m String
+lrArrow = symbol "<->" <|> symbol "↔"
 
 dRightArrow :: P m String
 dRightArrow = symbol "=>" <|> symbol "⇒"

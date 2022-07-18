@@ -205,7 +205,7 @@ arrTy =
       (do void rightArrow
           pure $ \e1 e2 -> mkArr (noLoc $ TMult Omega) e1 e2)
       <|>
-      (do void lollipop
+      (do void lrArrow
           pure $ \e1 e2 -> mkArr (noLoc $ TMult One) e1 e2)
       <|>
       (do void $ symbol "#"
