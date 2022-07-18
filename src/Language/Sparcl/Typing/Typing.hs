@@ -96,14 +96,6 @@ instantiateQ (TyForAll ts qt) = do
   return $ substTyQ subs qt
 instantiateQ t = return $ TyQual [] t
 
-ensureFunTy :: MonadTypeCheck m => MonoTy -> m (MonoTy, MonoTy, MonoTy)
-ensureFunTy ty = do
-  argTy <- newMetaTy
-  m     <- newMetaTy
-  resTy <- newMetaTy
-  tryUnify (TyCon nameTyArr [m, argTy, resTy]) ty
-  return (argTy, m, resTy)
-
 
 litTy :: MonadTypeCheck m => Literal -> m MonoTy
 litTy (LitInt _)      = return $ TyCon nameTyInt []
@@ -547,11 +539,14 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
       return (Abs pats' e', foldr (M.delete .  fst) umap xqs)
 
     go (App e1 e2) = do
-      (e1', ty1, umap1) <- inferTy e1
-      (argTy, m, resTy) <- atExp e1 $ atLoc (location e1) $ ensureFunTy ty1
-      mul <- ty2mult m
-      (e2', umap2) <- checkTyM e2 argTy mul
+      ty1   <- newMetaTy
+      argTy <- newMetaTy
+      resTy <- newMetaTy
+      m <- newMetaTy
 
+      (e1', umap1) <- checkTyM e1 ty1 omega
+      atExp e1 $ atLoc (location e1) $ tryUnify (tyarr m argTy resTy) ty1
+      (e2', umap2) <- checkTyM e2 argTy omega
       tryUnify resTy expectedTy
 
       return (App e1' e2', mergeUseMap umap1 umap2)
@@ -631,27 +626,25 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
           (tyA *-> tyB) *-> (tyB *-> tyA) *-> (tyA -@ tyB)
 
     go (FApp e1 e2) = do
-      (e1', ty1, umap1) <- inferTy e1
-
+      ty1   <- newMetaTy
       argTy <- newMetaTy
       resTy <- newMetaTy
+
+      (e1', umap1) <- checkTyM e1 ty1 omega
       atExp e1 $ atLoc (location e1) $ tryUnify (argTy -@ resTy) ty1
-
       (e2', umap2) <- checkTy e2 argTy
-
       tryUnify resTy expectedTy
 
       return (FApp e1' e2', mergeUseMap umap1 umap2)
 
     go (BApp e1 e2) = do
-      (e1', ty1, umap1) <- inferTy e1
-
+      ty1   <- newMetaTy
       argTy <- newMetaTy
       resTy <- newMetaTy
+
+      (e1', umap1) <- checkTyM e1 ty1 omega
       atExp e1 $ atLoc (location e1) $ tryUnify (argTy -@ resTy) ty1
-
       (e2', umap2) <- checkTy e2 resTy
-
       tryUnify argTy expectedTy
 
       return (BApp e1' e2', mergeUseMap umap1 umap2)
@@ -660,7 +653,7 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
       ty1 <- newMetaTy
       ty2 <- newMetaTy
 
-      (e1', umap1) <- checkTyM e1 ty1 omega
+      (e1', umap1) <- checkTy e1 ty1
 
       ((e2', umap2), ~[p'], bind) <- checkPatsTyK [p] [omega] [ty1] $ do
         checkTy e2 ty2
