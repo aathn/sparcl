@@ -51,7 +51,8 @@ lookupEnv = M.lookup
 
 lookupEnvStrict :: Name -> Env -> Value
 lookupEnvStrict n env = case M.lookup n env of
-  Nothing -> rtError $ D.text "Undefined variable:" D.<+> ppr n
+  Nothing -> rtError $ D.text "Undefined variable:" D.<+> ppr n D.</>
+                        D.text "Searched through: " D.<+> ppr (M.keys env)
   Just v  -> v
 
 removeEnv :: Name -> Env -> Env

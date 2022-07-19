@@ -83,8 +83,7 @@ evalF env expr = case expr of
     in
       case v1 of
        VFun env' n e ->
-         let res = evalB env' v2 e
-         in lookupEnvStrict n res
+         lookupEnvStrict n $ evalB env' v2 e
        VLift _ g -> g v2
        _ ->
          rtError $ text "expected a reversible function, but found " <> ppr v1
@@ -158,7 +157,7 @@ evalB env v expr = case expr of
         v2 =
           case v1 of
             VFun env' n e ->
-              lookupEnvStrict n (evalB env' v e)
+              lookupEnvStrict n $ evalB env' v e
             VLift _ g ->
               g v
             _ ->

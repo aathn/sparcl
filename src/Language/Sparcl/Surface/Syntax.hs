@@ -260,7 +260,6 @@ data Pat p = PLin !(LPPat p)
 
 isLinPat :: LPat p -> Bool
 isLinPat (Loc _ (PLin _)) = True
-isLinPat (Loc _ (PPat (Loc _ (PVar _)))) = True
 isLinPat _ = False
 
 isPVar :: LPat p -> Bool

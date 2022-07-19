@@ -10,6 +10,7 @@ import           Data.Void
 -- import Control.Monad.Writer
 
 import qualified Data.Map                       as M
+import           Data.Maybe                     (isJust)
 
 import           Control.Arrow                  (first, (***))
 import qualified Data.Graph                     as G
@@ -107,12 +108,8 @@ checkPatsTyK :: MonadTypeCheck m =>
   m (a, [LPat 'TypeCheck], [(Name,MonoTy,Multiplication)])
 checkPatsTyK ps ms ts comp = do
   let (fs, ps') = unzip $ map unLPat ps
-  void $ zipWithM addPatConstraints ps ms
   (res, psChecked, bind) <- checkPPatsTyK ps' ms ts comp
   return $ (res, zipWith ($) fs psChecked, bind)
-  where
-    addPatConstraints p _ | isLinPat p = return ()
-    addPatConstraints _ m = addConstraint (msubMult omega m)
 
 checkPPatsTyK :: MonadTypeCheck m =>
   [LPPat 'Renaming] -> [Multiplication] -> [MonoTy] -> m a ->
@@ -536,9 +533,11 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
     go (Abs pats e) = do
       -- multiplicity of arguments
       ts <- mapM (const newMetaTy) pats
-      qR <- newMetaTy
+
       let qsU = map (const omega) [1..length pats - 1]
-          qs = qsU ++ [qR]
+          qR  = if isLinPat $ last pats then one else omega
+          qs  = qsU ++ [qR]
+
       qs' <- mapM ty2mult qs
 
       retTy <- newMetaTy
@@ -705,7 +704,8 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
       return (Let decls' e', mergeUseMap umap umapLet)
 
     go (Case e0 alts) = do
-      mul <- newMetaTy >>= ty2mult
+      let hasRev = any ((||) <$> isLinPat . fst <*> isJust . withExp . snd) alts
+          mul    = if hasRev then one else omega
 
       tyPat <- newMetaTy
       (e0', umap0)   <- {- withMultVar (TyMetaV p) $ -} checkTyM e0 tyPat mul
@@ -962,7 +962,8 @@ inferMutual isTopLevel decls = do
       qs <-
         if pn > 0 then do
           let qsU = map (const omega) [1..pn - 1]
-          qR <- newMetaTy
+              hasRev = any ((||) <$> isLinPat . last . fst <*> isJust . withExp . snd) pcs
+              qR  = if hasRev then one else omega
           return $ qsU ++ [qR]
         else
           return []

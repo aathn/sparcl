@@ -4,13 +4,11 @@ module Language.Sparcl.Desugar (
   runDesugar
   ) where
 
-import           Data.Either                    (isLeft, rights)
 import           Data.Function                  (on)
-import           Data.List                      (groupBy, transpose)
-import           Data.Maybe                     (isJust, isNothing)
+import           Data.List                      (groupBy)
+import           Data.Maybe                     (isJust)
 import           Data.Void
 
-import           Control.Arrow                  (first)
 import           Control.Monad.Reader
 
 import           Language.Sparcl.SrcLoc
@@ -63,7 +61,7 @@ desugarExp (Loc _ expr) = go expr
       e'  <- desugarExp e
       let (ps, cs) = unzip alts
       ps' <- mapM desugarPat ps
-      if any (isJust . S.withExp) cs || all S.isLinPat ps then do
+      if any (isJust . S.withExp) cs || any S.isLinPat ps then do
         alts' <- zipWith (\p (e1,e2) -> (p,e1,e2)) ps' <$> mapM convertClauseR cs
         return $ C.RCase e' alts'
         else do
@@ -107,13 +105,7 @@ desugarExp (Loc _ expr) = go expr
       p1' <- desugarPat p1
       e1' <- desugarExp e1
       e2' <- desugarExp e2
-      -- There is no point in treating linear patterns specially with pin,
-      -- but we do so regardless for consistency
-      C.RPin n e1' <$> if S.isLinPat p1 then do
-        withExp <- generateWithExp e2'
-        return $ C.RCase (C.Var n) [(p1', e2', withExp)]
-        else
-        return $ C.Case  (C.Var n) [(p1',e2')]
+      return $ C.RPin n e1' $ C.Case (C.Var n) [(p1',e2')]
 
 makeTupleExpC :: [C.Exp Name] -> C.Exp Name
 makeTupleExpC [e] = e
@@ -126,74 +118,38 @@ makeTuplePatC ps  = C.PCon (nameTuple (length ps)) ps
 desugarRHS :: MonadDesugar m => [([S.LPat 'TypeCheck], S.Clause 'TypeCheck)] -> m (C.Exp Name)
 desugarRHS pcs =
   let (pps, cs) = unzip pcs
-  in newPatternNames pps cs $ \ns hasRev -> do
+      len = length $ head pps
+      hasRev = len > 0 && (any (isJust . S.withExp) cs || any (S.isLinPat . last) pps)
+  in withNewNames len $ \ns -> do
     body <-
       if not hasRev then do
         cs' <- mapM convertClauseU cs
-        maybePs <- makePatternsU ns pps
-        case maybePs of
-          Nothing ->
-            return $ head cs'
-          Just (e, psU) ->
-            return $ C.Case e (zip psU cs')
+        if len == 0 then
+          return $ head cs'
+          else do
+          (e, psU) <- makePatternsU ns pps
+          return $ C.Case e (zip psU cs')
       else do
         let nsU = init ns
-            Right nR = last ns
+            nR = last ns
             (ppsU, psR) = unzip $ map ((,) <$> init <*> last) pps
         cs' <- mapM convertClauseR cs
         psR' <- mapM desugarPat psR
-        maybePs <- makePatternsU nsU ppsU
-        case maybePs of
-          Nothing ->
-            return $ C.RCase (C.Var nR) (zipWith (\pR (e1,e2) -> (pR,e1,e2)) psR' cs')
-          Just (e, psU) ->
-            let alts = groupBy ((==) `on` (\(pU,_,_) -> pU)) (zip3 psU psR' cs')
-                alts' = map (\ralts@((pU,_,_):_) ->
-                               let ralts' = map (\(_,pR,(e1,e2)) -> (pR,e1,e2)) ralts
-                               in (pU, C.RCase (C.Var nR) ralts')) alts
-            in
-              return $ C.Case e alts'
-    return $ foldr C.Abs body (map (\case Left n -> n; Right n -> n) ns)
+        if len == 1 then
+          return $ C.RCase (C.Var nR) (zipWith (\pR (e1,e2) -> (pR,e1,e2)) psR' cs')
+          else do
+          (e, psU) <- makePatternsU nsU ppsU
+          let alts = groupBy ((==) `on` (\(pU,_,_) -> pU)) (zip3 psU psR' cs')
+              alts' = map (\ralts@((pU,_,_):_) ->
+                             let ralts' = map (\(_,pR,(e1,e2)) -> (pR,e1,e2)) ralts
+                             in (pU, C.RCase (C.Var nR) ralts')) alts
+          return $ C.Case e alts'
+    return $ foldr C.Abs body ns
   where
-    newPatternNames :: MonadDesugar m => [[S.LPat 'TypeCheck]] -> [S.Clause 'TypeCheck] -> ([Either Name Name] -> Bool -> m r) -> m r
-    newPatternNames pps cs k =
-      let (ns1, hasRev) = go (transpose pps)
-      in
-        withNewNames (length (filter isNothing ns1)) $ \ns2 -> do
-        let ns = combineNames ns1 ns2
-        k ns hasRev
-      where
-        go :: [[S.LPat 'TypeCheck]] -> ([Maybe Name], Bool)
-        go [] = ([], False)
-        go [ps] =
-          if any (isJust . S.withExp) cs then
-            ([Nothing], True)
-          else
-            let var = getPatVar ps
-            in ([var], isNothing var && all S.isLinPat ps)
-        go (ps:rest) = first (getPatVar ps :) (go rest)
-
-        getPatVar :: [S.LPat 'TypeCheck] -> Maybe Name
-        getPatVar ps = head <$> mapM getPVar ps
-          where
-            getPVar p = case unLoc . snd . S.unLPat $ p of
-              S.PVar (n, _) -> Just n
-              _             -> Nothing
-
-        combineNames :: [Maybe Name] -> [Name] -> [Either Name Name]
-        combineNames (Just n : ns1) ns2 = Left n : combineNames ns1 ns2
-        combineNames (Nothing : ns1) (n:ns2) = Right n : combineNames ns1 ns2
-        combineNames _ _ = []
-
-    makePatternsU :: MonadDesugar m => [Either Name Name] -> [[S.LPat 'TypeCheck]] -> m (Maybe (C.Exp Name, [C.Pat Name]))
-    makePatternsU ns pps =
-      if all isLeft ns then
-        return Nothing
-      else do
-        ppsC <- mapM (mapM desugarPat) pps
-        let pps' = map (\ps -> rights $ zipWith (\p n -> const p <$> n) ps ns) ppsC
-            ns'  = map C.Var $ rights ns
-        return $ Just (makeTupleExpC ns', map makeTuplePatC pps')
+    makePatternsU :: MonadDesugar m => [Name] -> [[S.LPat 'TypeCheck]] -> m (C.Exp Name, [C.Pat Name])
+    makePatternsU ns pps = do
+      pps' <- mapM (mapM desugarPat) pps
+      return (makeTupleExpC (map C.Var ns), map makeTuplePatC pps')
 
 
 convertClauseU :: MonadDesugar m => S.Clause 'TypeCheck -> m (C.Exp Name)
