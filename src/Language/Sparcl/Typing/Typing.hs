@@ -566,8 +566,8 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
       return (App e1' e2', mergeUseMap umap1 umap2)
 
     go (Let1 p e1 e2) = do
-      mul <- newMetaTy >>= ty2mult
       ty1 <- newMetaTy
+      let mul = if isLinPat p then one else omega
 
       (e1', umap1) <- checkTyM e1 ty1 mul
 
