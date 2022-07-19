@@ -36,6 +36,13 @@ instance Pretty Value where
   pprPrec _ (VOp _) = D.text "<builtin function>"
   pprPrec _ (VLift _ _) = D.text "<lifted bijection>"
 
+instance Eq Value where
+  VCon c vs  == VCon c' vs' =
+    c == c' && length vs == length vs' && and (zipWith (==) vs vs')
+  VLit l     == VLit l'     = l == l'
+  VFun _ n _ == VFun _ n' _ = n == n'
+  _          == _           = False
+
 extendsEnv :: [(Name, Value)] -> Env -> Env
 extendsEnv nvs env = foldr (uncurry extendEnv) env nvs
 

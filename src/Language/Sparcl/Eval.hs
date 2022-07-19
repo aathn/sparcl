@@ -102,28 +102,40 @@ evalB env v expr = case expr of
   Var n ->
     case lookupEnv n env of
       Nothing -> singletonEnv n v
-      Just _ -> emptyEnv
+      Just v' | v == v' -> emptyEnv
+      Just v' ->
+        rtError $ text "value out of range during backwards evaluation: " <>
+                   ppr v' <> text " =/= " <> ppr v
 
-  Lit _ ->
-    emptyEnv
+  Lit l ->
+    case v of
+      VLit l' | l == l' -> emptyEnv
+      _ ->
+        rtError $ text "literal out of range during backwards evaluation: " <>
+                   ppr l <> text " =/= " <> ppr v
 
-  App _ _  ->
-    emptyEnv
+  App e1 e2 ->
+    let v1 = evalF env e1
+        v2 = evalF env e2
+        v' = mkValFun v1 v2
+    in
+      if v == v' then emptyEnv
+      else
+        rtError $ text "value out of range during backwards evaluation: " <>
+                   ppr v' <> text " =/= " <> ppr v
 
   Abs n e ->
     case v of
-      VFun _ n' _ | n == n' ->
-                         emptyEnv
+      VFun _ n' _ | n == n' -> emptyEnv
       _ ->
-        rtError $ text "mismatching lambdas during backwards evaluation: " <>
+        rtError $ text "lambda out of range during backwards evaluation: " <>
                    ppr (Abs n e) <> text " =/= " <> ppr v
 
   Con q es ->
     case v of
-      VCon q' vs | q == q' ->
-                     foldl unionEnv emptyEnv $ zipWith (evalB env) vs es
+      VCon q' vs | q == q' -> foldl unionEnv emptyEnv $ zipWith (evalB env) vs es
       _ ->
-        rtError $ text "mismatching constructors during backwards evaluation: " <>
+        rtError $ text "constructor out of range during backwards evaluation: " <>
                    ppr (Con q es) <> text " =/= " <> ppr v
 
   Case e0 pes ->
@@ -134,7 +146,8 @@ evalB env v expr = case expr of
     evalCaseB env v e0 pes
 
   Lift _ _ ->
-    emptyEnv
+    rtError $ text "value out of range during backwards evaluation: " <>
+                   text "lifted bijections not supported in backwards evaluation"
 
   Let ds e ->
     let env' = evalFBind env ds
