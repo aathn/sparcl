@@ -74,6 +74,12 @@ data ConTy = ConTy ![TyVar]        -- universal variables
                    ![Ty]           -- constructor's argument types
                    !Ty             -- constructor's return type
 
+instance Pretty ConTy where
+  ppr (ConTy xs args ty) =
+    let hd d = if null xs then d
+               else hsep [ text "forall", hsep (map ppr xs) <> text "." ] <> align d
+    in hd $ angles (hsep $ punctuate comma $ map ppr args) <> text "<->" <> ppr ty
+
 instance MultiplicityLike Ty where
   one   = TyMult One
   omega = TyMult Omega

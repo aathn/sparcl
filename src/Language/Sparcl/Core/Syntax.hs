@@ -132,7 +132,7 @@ instance Pretty n => Pretty (Exp n) where
 
 data Pat n = PVar !n
            | PCon !n ![Pat n]
-  deriving Show
+  deriving (Eq, Show)
 
 instance Pretty n => Pretty (Pat n) where
   pprPrec _ (PVar n) = ppr n

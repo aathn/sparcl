@@ -498,25 +498,25 @@ after renaming of other part. For example,
 
 -}
 
-type ToBeFilled a = State [LPat 'Renaming] a
+type ToBeFilled a = State [LPPat 'Renaming] a
 
-renamePats1 :: DBLevel -> LocalNames -> BoundVars -> [LPat 'Parsing]
-               -> (ToBeFilled [LPat 'Renaming] -> [LPat 'Parsing] ->
+renamePPats1 :: DBLevel -> LocalNames -> BoundVars -> [LPPat 'Parsing]
+               -> (ToBeFilled [LPPat 'Renaming] -> [LPPat 'Parsing] ->
                    DBLevel -> LocalNames -> BoundVars -> Renaming r) -> Renaming r
-renamePats1 level localnames boundVars z cont =
+renamePPats1 level localnames boundVars z cont =
   case z of
     []   -> cont (pure []) [] level localnames boundVars
     p:ps ->
-      renamePat1  level  localnames  boundVars  p  $ \p'  qp  level'  localnames'  boundVars' ->
-      renamePats1 level' localnames' boundVars' ps $ \ps' qps level'' localnames'' boundVars'' ->
+      renamePPat1  level  localnames  boundVars  p  $ \p'  qp  level'  localnames'  boundVars' ->
+      renamePPats1 level' localnames' boundVars' ps $ \ps' qps level'' localnames'' boundVars'' ->
       cont ((:) <$> p' <*> ps') (qp ++ qps) level'' localnames'' boundVars''
 
 
-renamePat1 :: DBLevel -> LocalNames -> BoundVars -> LPat 'Parsing
-              -> (ToBeFilled (LPat 'Renaming) -> [LPat 'Parsing] ->
+renamePPat1 :: DBLevel -> LocalNames -> BoundVars -> LPPat 'Parsing
+              -> (ToBeFilled (LPPat 'Renaming) -> [LPPat 'Parsing] ->
                   DBLevel -> LocalNames -> BoundVars -> Renaming r) -> Renaming r
 
-renamePat1 level localnames boundVars (Loc loc pat) cont =
+renamePPat1 level localnames boundVars (Loc loc pat) cont =
   go pat $ \p' qs level' localnames' boundVars' -> cont (Loc loc <$> p') qs level' localnames' boundVars'
   where
     go (PVar x) k =
@@ -531,19 +531,19 @@ renamePat1 level localnames boundVars (Loc loc pat) cont =
 
     go (PCon c ps) k = do
       c' <- resolveImportedName loc c
-      renamePats1 level localnames boundVars ps $ \ps' queue level' localnames' boundVars' ->
+      renamePPats1 level localnames boundVars ps $ \ps' queue level' localnames' boundVars' ->
         k (PCon c' <$> ps') queue level' localnames' boundVars'
     -- go (PBang p) k =
     --   renamePat1 level localnames boundVars p $ \p' queue level' localnames' boundVars' ->
     --     k (PBang <$> p') queue level' localnames' boundVars'
 
-renamePats :: DBLevel -> LocalNames -> BoundVars -> [LPat 'Parsing]
-              -> ([LPat 'Renaming] -> DBLevel -> LocalNames -> BoundVars -> Renaming r) -> Renaming r
-renamePats level localnames boundVars [] k =
+renamePPats :: DBLevel -> LocalNames -> BoundVars -> [LPPat 'Parsing]
+              -> ([LPPat 'Renaming] -> DBLevel -> LocalNames -> BoundVars -> Renaming r) -> Renaming r
+renamePPats level localnames boundVars [] k =
   k [] level localnames boundVars
-renamePats level localnames boundVars ps k =
-  renamePats1 level  localnames  boundVars  ps $ \ps' qs level1 localnames1 boundVars1 ->
-  renamePats  level1 localnames1 boundVars1 qs $ \qs' level2 localnames2 boundVars2 ->
+renamePPats level localnames boundVars ps k =
+  renamePPats1 level  localnames  boundVars  ps $ \ps' qs level1 localnames1 boundVars1 ->
+  renamePPats  level1 localnames1 boundVars1 qs $ \qs' level2 localnames2 boundVars2 ->
   k (evalState ps' qs') level2 localnames2 boundVars2
 
 -- renamePats level localnames bvs [] k = k [] level localnames bvs
@@ -551,12 +551,27 @@ renamePats level localnames boundVars ps k =
 --   renamePat level localnames bvs p $ \p' lv' nm' bvs' ->
 --    renamePats lv' nm' bvs' ps $ \ps' lv'' nm'' bvs''  -> k (p' : ps') lv'' nm'' bvs''
 
+renamePPat :: DBLevel -> LocalNames -> BoundVars -> LPPat 'Parsing
+             -> (LPPat 'Renaming -> DBLevel -> LocalNames -> BoundVars -> Renaming r) -> Renaming r
+renamePPat level localnames boundVars p k =
+  renamePPat1 level  localnames  boundVars  p  $ \p' qs level1 localnames1 boundVars1 ->
+  renamePPats level1 localnames1 boundVars1 qs $ \qs'   level2 localnames2 boundVars2 ->
+  k (evalState p' qs') level2 localnames2 boundVars2
+
+
+renamePats :: DBLevel -> LocalNames -> BoundVars -> [LPat 'Parsing]
+              -> ([LPat 'Renaming] -> DBLevel -> LocalNames -> BoundVars -> Renaming r) -> Renaming r
+renamePats level localnames boundVars ps k =
+  let (fs, ps') = unzip $ map unLPat ps
+  in renamePPats level localnames boundVars ps' (k . zipWith ($) fs)
+
 renamePat :: DBLevel -> LocalNames -> BoundVars -> LPat 'Parsing
              -> (LPat 'Renaming -> DBLevel -> LocalNames -> BoundVars -> Renaming r) -> Renaming r
 renamePat level localnames boundVars p k =
-  renamePat1 level  localnames  boundVars  p  $ \p' qs level1 localnames1 boundVars1 ->
-  renamePats level1 localnames1 boundVars1 qs $ \qs'   level2 localnames2 boundVars2 ->
-  k (evalState p' qs') level2 localnames2 boundVars2
+  let (f, p') = unLPat p
+  in renamePPat level localnames boundVars p' (k . f)
+
+
 -- renamePat level localnames boundVars (Loc loc pat) cont = go pat $ \p' lv nm bvs -> cont (Loc loc p') lv nm bvs
 --   where
 --     go (PVar x) k =

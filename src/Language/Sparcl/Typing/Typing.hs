@@ -10,7 +10,6 @@ import           Data.Void
 -- import Control.Monad.Writer
 
 import qualified Data.Map                       as M
-import           Data.Maybe                     (isJust)
 
 import           Control.Arrow                  (first, (***))
 import qualified Data.Graph                     as G
@@ -107,7 +106,19 @@ checkPatsTyK :: MonadTypeCheck m =>
   [LPat 'Renaming] -> [Multiplication] -> [MonoTy] -> m a ->
   m (a, [LPat 'TypeCheck], [(Name,MonoTy,Multiplication)])
 checkPatsTyK ps ms ts comp = do
-  (cs, ps', bind) <- checkPatsTy ps ms ts
+  let (fs, ps') = unzip $ map unLPat ps
+  void $ zipWithM addPatConstraints ps ms
+  (res, psChecked, bind) <- checkPPatsTyK ps' ms ts comp
+  return $ (res, zipWith ($) fs psChecked, bind)
+  where
+    addPatConstraints p _ | isPLin p = return ()
+    addPatConstraints _ m = addConstraint (msubMult omega m)
+
+checkPPatsTyK :: MonadTypeCheck m =>
+  [LPPat 'Renaming] -> [Multiplication] -> [MonoTy] -> m a ->
+  m (a, [LPPat 'TypeCheck], [(Name,MonoTy,Multiplication)])
+checkPPatsTyK ps ms ts comp = do
+  (cs, ps', bind) <- checkPPatsTy ps ms ts
   readConstraint >>= \r -> debugPrint 4 $ red $ "CC:" <+> ppr r
   res <- withVars [ (n,t) | (n,t,_) <- bind ] $
     if null cs then do
@@ -119,24 +130,21 @@ checkPatsTyK ps ms ts comp = do
   readConstraint >>= \r -> debugPrint 4 $ red $ "CC:" <+> ppr r
   return (res, ps', bind)
 
-
-
-
-checkPatsTy :: MonadTypeCheck m =>
-  [LPat 'Renaming] -> [Multiplication] -> [MonoTy] ->
-  m ([TyConstraint], [LPat 'TypeCheck], [(Name,MonoTy,Multiplication)])
-checkPatsTy [] [] [] = return ([], [], [])
-checkPatsTy (p:ps) (m:ms) (t:ts) = do
-  (cs_ps, ps', bind)  <- checkPatsTy ps ms ts
-  (cs_p,  p',  pbind) <- checkPatTy p m t
+checkPPatsTy :: MonadTypeCheck m =>
+  [LPPat 'Renaming] -> [Multiplication] -> [MonoTy] ->
+  m ([TyConstraint], [LPPat 'TypeCheck], [(Name,MonoTy,Multiplication)])
+checkPPatsTy [] [] [] = return ([], [], [])
+checkPPatsTy (p:ps) (m:ms) (t:ts) = do
+  (cs_ps, ps', bind)  <- checkPPatsTy ps ms ts
+  (cs_p,  p',  pbind) <- checkPPatTy p m t
   return (cs_p ++ cs_ps, p':ps', pbind ++ bind)
-checkPatsTy _ _ _ = error "Cannot happen."
+checkPPatsTy _ _ _ = error "Cannot happen."
 
-checkPatTy ::
+checkPPatTy ::
   MonadTypeCheck m =>
-  LPat 'Renaming -> Multiplication -> MonoTy ->
-  m ([TyConstraint], LPat 'TypeCheck, [(Name, MonoTy, Multiplication)])
-checkPatTy (Loc loc pat) pmult patTy = do
+  LPPat 'Renaming -> Multiplication -> MonoTy ->
+  m ([TyConstraint], LPPat 'TypeCheck, [(Name, MonoTy, Multiplication)])
+checkPPatTy (Loc loc pat) pmult patTy = do
   (cs, pat', bind) <- atLoc loc $ go pat
   return (cs, Loc loc pat', bind)
   where
@@ -160,14 +168,14 @@ checkPatTy (Loc loc pat) pmult patTy = do
 
       (cs, ps', bind) <-
         foldr (\(csj,pj',bindj) (cs, ps', bind) -> (csj++cs, pj':ps', bindj ++ bind)) ([],[],[]) <$>
-        zipWithM (\pj tj -> checkPatTy pj pmult tj) ps args
+        zipWithM (\pj tj -> checkPPatTy pj pmult tj) ps args
 
       return (cs, PCon (c, ret) ps', bind)
 
 
     go (PWild x) = do -- this is only possible when pmult is omega
       -- tryUnify pmult (TyMult Omega)
-      ~(cs, Loc _ (PVar x'), _bind) <- checkPatTy (noLoc $ PVar x) omega patTy
+      ~(cs, Loc _ (PVar x'), _bind) <- checkPPatTy (noLoc $ PVar x) omega patTy
       -- cs must be []
       addConstraint $ msubMult omega pmult
       return (cs, PWild x', [] )
@@ -522,13 +530,15 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
 
     go (Abs pats e) = do
       -- multiplicity of arguments
-      qs <- mapM (const newMetaTy) pats
       ts <- mapM (const newMetaTy) pats
+      qR <- newMetaTy
+      let qsU = map (const omega) [1..length pats - 1]
+          qs = qsU ++ [qR]
       qs' <- mapM ty2mult qs
 
       retTy <- newMetaTy
 
-      ((e', umap), pats', bind) <- checkPatsTyK pats qs' ts $ do
+      ((e', umap), pats', bind) <- checkPatsTyK pats qs' ts $
         checkTy e retTy
 
       let xqs = map (\(x,_,q) -> (x,q)) bind
@@ -536,7 +546,7 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
       tryUnify (foldr (uncurry tyarr) retTy $ zip qs ts) expectedTy
       constrainVars xqs umap
 
-      return (Abs pats' e', foldr (M.delete .  fst) umap xqs)
+      return (Abs pats' e', raiseUse omega $ foldr (M.delete .  fst) umap xqs)
 
     go (App e1 e2) = do
       ty1   <- newMetaTy
@@ -552,14 +562,12 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
       return (App e1' e2', mergeUseMap umap1 umap2)
 
     go (Let1 p e1 e2) = do
-      qPat  <- newMetaTy
-      qPat' <- ty2mult qPat
-
+      mul <- newMetaTy >>= ty2mult
       ty1 <- newMetaTy
 
-      (e1', umap1) <- checkTyM e1 ty1 qPat'
+      (e1', umap1) <- checkTyM e1 ty1 mul
 
-      ((e2', umap2), ~[p'], bind) <- checkPatsTyK [p] [qPat'] [ty1] $ do
+      ((e2', umap2), ~[p'], bind) <- checkPatsTyK [p] [mul] [ty1] $ do
         checkTy e2 expectedTy
 
       let xqs = map (\(x,_,q) -> (x,q)) bind
@@ -692,7 +700,7 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
       return (Let decls' e', mergeUseMap umap umapLet)
 
     go (Case e0 alts) = do
-      let mul = if any (isJust . withExp . snd) alts then one else omega
+      mul <- newMetaTy >>= ty2mult
 
       tyPat <- newMetaTy
       (e0', umap0)   <- {- withMultVar (TyMetaV p) $ -} checkTyM e0 tyPat mul
@@ -945,7 +953,14 @@ inferMutual isTopLevel decls = do
       -- body's type
       ty <- newMetaTy
       -- argument's multiplicity
-      qs <- mapM (const newMetaTy) [1..numPatterns pcs]
+      let pn = numPatterns pcs
+      qs <-
+        if pn > 0 then do
+          let qsU = map (const omega) [1..pn - 1]
+          qR <- newMetaTy
+          return $ qsU ++ [qR]
+        else
+          return []
 
       (pcs', umap) <- gatherAltUC =<< mapM (flip (checkTyPC loc qs) ty) pcs
 

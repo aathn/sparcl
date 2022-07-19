@@ -11,7 +11,9 @@ module Language.Sparcl.Surface.Syntax (
 
   isTyArr, decomposeArrTy, decomposeTyCon,
 
-  LPat, Pat(..),
+  Pat(..), LPat, PPat(..), LPPat,
+  unLPat, isPLin, isPVar,
+
   LExp, Exp(..), Clause(..),
 
 
@@ -252,11 +254,29 @@ instance AllPretty p => Pretty (Exp p) where
     pprPrec 0 e2
 
 
-
 type LPat p = Loc (Pat p)
-data Pat p = PVar !(XId p)
-           | PCon !(XId p) ![LPat p]
-           | PWild !(XPWild p) -- PWild x will be treated as !x after renaming
+data Pat p = PLin !(LPPat p)
+           | PPat !(LPPat p)
+
+isPLin :: LPat p -> Bool
+isPLin (Loc _ (PLin _)) = True
+isPLin (Loc _ (PPat (Loc _ (PVar _)))) = True
+isPLin _ = False
+
+isPVar :: LPat p -> Bool
+isPVar p =
+  case unLoc . snd . unLPat $ p of
+    PVar _ -> True
+    _      -> False
+
+unLPat :: LPat p1 -> (LPPat p2 -> LPat p2, LPPat p1)
+unLPat (Loc loc (PLin p)) = (Loc loc . PLin, p)
+unLPat (Loc loc (PPat p)) = (Loc loc . PPat, p)
+
+type LPPat p = Loc (PPat p)
+data PPat p = PVar !(XId p)
+            | PCon !(XId p) ![LPPat p]
+            | PWild !(XPWild p) -- PWild x will be treated as !x after renaming
          -- TODO: Add literal pattern
 --   deriving Show
 
@@ -269,6 +289,13 @@ instance AllPretty p => Pretty (Loc (Pat p)) where
   pprPrec k = pprPrec k . unLoc
 
 instance AllPretty p => Pretty (Pat p) where
+  pprPrec _ (PLin p) = D.text "*" <> pprPrec 1 p
+  pprPrec k (PPat p) = pprPrec k p
+
+instance AllPretty p => Pretty (Loc (PPat p)) where
+  pprPrec k = pprPrec k . unLoc
+
+instance AllPretty p => Pretty (PPat p) where
   pprPrec _ (PVar n) = ppr n
 
   pprPrec _ (PCon c ps)

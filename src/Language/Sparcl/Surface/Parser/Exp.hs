@@ -83,8 +83,8 @@ assignment = do
   e <- expr
   return (p, e)
 
-simplePat :: Monad m => P m (LPat 'Parsing)
-simplePat = loc $
+simplePpat :: Monad m => P m (LPPat 'Parsing)
+simplePpat = loc $
   conPat
   <|> varPat
   <|> (unLoc <$> tuplePat)
@@ -99,21 +99,30 @@ simplePat = loc $
 
     wildPat = do
       void $ symbol "_"
-      return (PWild () :: Pat 'Parsing)
+      return (PWild () :: PPat 'Parsing)
 
-tuplePat :: Monad m => P m (LPat 'Parsing)
+tuplePat :: Monad m => P m (LPPat 'Parsing)
 tuplePat = mkTuplePat <$>
-  parens (pat `P.sepBy` comma)
+  parens (ppat `P.sepBy` comma)
 
-pat :: Monad m => P m (LPat 'Parsing)
-pat =
+ppat :: Monad m => P m (LPPat 'Parsing)
+ppat =
   P.try (loc $ do
             c <- qconName
             sp
-            ps <- P.some simplePat
+            ps <- P.some simplePpat
             return $ PCon c ps)
   <|>
-  simplePat
+  simplePpat
+
+simplePat :: Monad m => P m (LPat 'Parsing)
+simplePat =
+  loc $ (PLin <$> (symbol "*" *> simplePpat)) <|> (PPat <$> simplePpat)
+
+pat :: Monad m => P m (LPat 'Parsing)
+pat =
+  loc $ (PLin <$> (symbol "*" *> simplePpat)) <|> (PPat <$> ppat)
+
 
 introForAll :: LTy 'Parsing -> LTy 'Parsing
 introForAll ty =
@@ -475,7 +484,7 @@ tupleExpr :: Monad m => P m (LExp 'Parsing)
 tupleExpr = mkTupleExp <$> parens (expr `P.sepBy` comma)
 
 
-mkTuplePat :: [Loc (Pat 'Parsing)] -> Loc (Pat 'Parsing)
+mkTuplePat :: [LPPat 'Parsing] -> LPPat 'Parsing
 mkTuplePat [p] = p
 mkTuplePat ps  = Loc (mconcat $ map location ps) $
                  PCon (BuiltIn $ nameTuple $ length ps) ps
