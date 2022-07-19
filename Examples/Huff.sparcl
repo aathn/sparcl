@@ -10,8 +10,8 @@ def invert h *x = h <| x
 sig decR : Huff -> List Bit <-> (Symbol, List Bit)
 def decR (Lf s)   *ys = (s, ys)
        | (Br l r) *ys = case ys of
-         | *(Cons Z ys') -> decR l |> ys' with \(s, _) ->  member s l
-         | *(Cons O ys') -> decR r |> ys'
+         | Cons Z ys' -> decR l |> ys' with \(s, _) ->  member s l
+         | Cons O ys' -> decR r |> ys'
          end
 
 sig encR : Huff -> (Symbol, List Bit) <-> List Bit
@@ -34,12 +34,12 @@ def makeHuff _ = Br (Lf 'a') (Br (Lf 'b') (Br (Lf 'c') (Lf 'd')))
 
 sig huffCompress : List Symbol <-> (Huff, List Bit)
 def huffCompress *s =
-  -- let *(s, h) <- pin s' <- s in makeHuff s' in
-  pin h' <- makeHuff Nil in encode h' |> s
+  let *(s, h) <- pin s' <- s in makeHuff s' in
+  pin h' <- h in encode h' |> s
 
 sig encode : Huff -> List Symbol <-> List Bit
-def encode h *Nil         = Nil with null
-         | h *(Cons s ss) = encR h |> (s, encode h |> ss)
+def encode h Nil         = Nil with null
+         | h (Cons s ss) = encR h |> (s, encode h |> ss)
 
 sig null : forall a. List a -> Bool
 def null Nil = True
