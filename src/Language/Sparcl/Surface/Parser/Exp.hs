@@ -87,6 +87,7 @@ simplePpat :: Monad m => P m (LPPat 'Parsing)
 simplePpat = loc $
   conPat
   <|> varPat
+  <|> litPat
   <|> (unLoc <$> tuplePat)
   <|> wildPat
   where
@@ -96,6 +97,9 @@ simplePpat = loc $
 
     varPat =
       PVar <$> L.lexeme sp varName
+
+    litPat =
+      PLit <$> literal
 
     wildPat = do
       void $ symbol "_"
@@ -464,11 +468,12 @@ simpleExprCon startLoc =
 
 simpleExpr :: Monad m => SrcSpan -> P m (LExp 'Parsing)
 simpleExpr startLoc =
-  literal
+  litExpr
   <|> liftExpr
   <|> varExpr
   <|> tupleExpr
   where
+    litExpr = loc $ Lit <$> literal
     liftExpr = do
       void $ keyword "lift"
       endLoc <- getSrcLoc
@@ -496,8 +501,8 @@ mkTupleExp es =
   noLoc $ Con (BuiltIn $ nameTuple (length es)) es
 
 
-literal :: Monad m => P m (LExp 'Parsing)
-literal = loc $ fmap Lit $
+literal :: Monad m => P m Literal
+literal =
   intLit
   <|> charLit
   where

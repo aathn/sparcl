@@ -131,11 +131,14 @@ instance Pretty n => Pretty (Exp n) where
 
 
 data Pat n = PVar !n
+           | PLit !Literal
            | PCon !n ![Pat n]
   deriving (Eq, Show)
 
 instance Pretty n => Pretty (Pat n) where
   pprPrec _ (PVar n) = ppr n
+
+  pprPrec _ (PLit l) = ppr l
 
   pprPrec _ (PCon c []) = ppr c
   pprPrec k (PCon c ps) = parensIf (k > 0) $
@@ -143,6 +146,7 @@ instance Pretty n => Pretty (Pat n) where
 
 freeVarsP :: Pat n -> [n]
 freeVarsP (PVar n)    = [n]
+freeVarsP (PLit _)    = []
 freeVarsP (PCon _ ps) = concatMap freeVarsP ps
 
 

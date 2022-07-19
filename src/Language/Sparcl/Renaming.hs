@@ -525,6 +525,9 @@ renamePPat1 level localnames boundVars (Loc loc pat) cont =
           nm' = M.insert bn n' localnames
       in k (pure $ PVar n') [] (level + 1) nm' (S.insert n' boundVars)
 
+    go (PLit l) k =
+      k (pure $ PLit l) [] level localnames boundVars
+
     go (PWild _) k =
       let n'  = Alpha level (User "_")
       in k (pure $ PVar n') [] (level + 1) localnames boundVars

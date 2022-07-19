@@ -63,7 +63,7 @@ desugarExp (Loc _ expr) = go expr
       e'  <- desugarExp e
       let (ps, cs) = unzip alts
       ps' <- mapM desugarPat ps
-      if any (isJust . S.withExp) cs || any S.isPLin ps then do
+      if any (isJust . S.withExp) cs || all S.isLinPat ps then do
         alts' <- zipWith (\p (e1,e2) -> (p,e1,e2)) ps' <$> mapM convertClauseR cs
         return $ C.RCase e' alts'
         else do
@@ -109,7 +109,7 @@ desugarExp (Loc _ expr) = go expr
       e2' <- desugarExp e2
       -- There is no point in treating linear patterns specially with pin,
       -- but we do so regardless for consistency
-      C.RPin n e1' <$> if S.isPLin p1 then do
+      C.RPin n e1' <$> if S.isLinPat p1 then do
         withExp <- generateWithExp e2'
         return $ C.RCase (C.Var n) [(p1', e2', withExp)]
         else
@@ -170,7 +170,7 @@ desugarRHS pcs =
             ([Nothing], True)
           else
             let var = getPatVar ps
-            in ([var], isNothing var && any S.isPLin ps)
+            in ([var], isNothing var && all S.isLinPat ps)
         go (ps:rest) = first (getPatVar ps :) (go rest)
 
         getPatVar :: [S.LPat 'TypeCheck] -> Maybe Name
@@ -220,6 +220,7 @@ desugarPPat :: MonadDesugar m => S.LPPat 'TypeCheck -> m (C.Pat Name)
 desugarPPat = go . unLoc
   where
     go (S.PVar (x, _ty))    = return $ C.PVar x
+    go (S.PLit l)           = return $ C.PLit l
     go (S.PCon (c, _ty) ps) = C.PCon c <$> mapM desugarPPat ps
     go _                    = error "desugarPat: Cannot happen."
 

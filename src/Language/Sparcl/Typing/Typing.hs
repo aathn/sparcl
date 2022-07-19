@@ -111,7 +111,7 @@ checkPatsTyK ps ms ts comp = do
   (res, psChecked, bind) <- checkPPatsTyK ps' ms ts comp
   return $ (res, zipWith ($) fs psChecked, bind)
   where
-    addPatConstraints p _ | isPLin p = return ()
+    addPatConstraints p _ | isLinPat p = return ()
     addPatConstraints _ m = addConstraint (msubMult omega m)
 
 checkPPatsTyK :: MonadTypeCheck m =>
@@ -150,6 +150,11 @@ checkPPatTy (Loc loc pat) pmult patTy = do
   where
     go (PVar x) =
       return ([], PVar (x, patTy), [(x,patTy, pmult)])
+
+    go (PLit l) = do
+      ty <- litTy l
+      tryUnify ty patTy
+      return ([], PLit l, [])
 
     go (PCon c ps) = do
       ConTy xs args_ ret_ <- askConType loc c

@@ -12,7 +12,7 @@ module Language.Sparcl.Surface.Syntax (
   isTyArr, decomposeArrTy, decomposeTyCon,
 
   Pat(..), LPat, PPat(..), LPPat,
-  unLPat, isPLin, isPVar,
+  unLPat, isLinPat, isPVar,
 
   LExp, Exp(..), Clause(..),
 
@@ -258,10 +258,10 @@ type LPat p = Loc (Pat p)
 data Pat p = PLin !(LPPat p)
            | PPat !(LPPat p)
 
-isPLin :: LPat p -> Bool
-isPLin (Loc _ (PLin _)) = True
-isPLin (Loc _ (PPat (Loc _ (PVar _)))) = True
-isPLin _ = False
+isLinPat :: LPat p -> Bool
+isLinPat (Loc _ (PLin _)) = True
+isLinPat (Loc _ (PPat (Loc _ (PVar _)))) = True
+isLinPat _ = False
 
 isPVar :: LPat p -> Bool
 isPVar p =
@@ -275,9 +275,9 @@ unLPat (Loc loc (PPat p)) = (Loc loc . PPat, p)
 
 type LPPat p = Loc (PPat p)
 data PPat p = PVar !(XId p)
+            | PLit !Literal
             | PCon !(XId p) ![LPPat p]
             | PWild !(XPWild p) -- PWild x will be treated as !x after renaming
-         -- TODO: Add literal pattern
 --   deriving Show
 
 type family XPWild (p :: Pass) where
@@ -297,6 +297,7 @@ instance AllPretty p => Pretty (Loc (PPat p)) where
 
 instance AllPretty p => Pretty (PPat p) where
   pprPrec _ (PVar n) = ppr n
+  pprPrec _ (PLit l) = ppr l
 
   pprPrec _ (PCon c ps)
     | Just n <- checkTuple c,  n == length ps =

@@ -191,6 +191,7 @@ findMatch :: Value -> Pat Name -> Maybe [ (Name, Value) ]
 findMatch v (PVar n) = return [(n, v)]
 findMatch (VCon q vs) (PCon q' ps) | q == q' && length vs == length ps =
                                        concat <$> zipWithM findMatch vs ps
+findMatch (VLit l) (PLit l') | l == l' = Just []
 findMatch _ _ = Nothing
 
 
@@ -214,7 +215,7 @@ evalCaseF env v0 alts = go [] alts
           vs = map (\c -> mkValBool (mkValFun (evalF env c) res)) checker
       in
         if (not v || or vs) then
-          rtError $ text "Assertion failed (fwd) on case " <> ppr p
+          rtError $ text "Assertion failed (fwd) after executing branch " <> ppr p
         else
           ()
 
@@ -238,7 +239,7 @@ evalCaseB env vres e0 alts =
             xs = freeVarsP p
             v0 = fillPat p $ zip xs (map (\x -> lookupEnvStrict x env1) xs)
             !() = if any ($ v0) checker then
-                    rtError $ text "Assertion failed (bwd) on case " <> ppr p
+                    rtError $ text "Assertion failed (bwd) after executing branch " <> ppr p
                   else ()
         in
           (v0, removesEnv xs env1)
@@ -248,6 +249,8 @@ evalCaseB env vres e0 alts =
     fillPat :: Pat Name -> [ (Name, Value) ] -> Value
     fillPat (PVar n) bs =
       fromMaybe (error "Shouldn't happen") (lookup n bs)
+
+    fillPat (PLit l) _ = VLit l
 
     fillPat (PCon c ps) bs =
       VCon c (map (flip fillPat bs) ps)
