@@ -228,7 +228,7 @@ arrTy =
 
 appTy :: Monad m => P m (LTy 'Parsing)
 appTy =
-  conTy <|> simpleTy
+  P.try conTy <|> simpleTy
   where
     conTy = do
       Loc l c <- loc qconName
@@ -444,7 +444,7 @@ appExpr startLoc =
   where
     conApp :: Monad m => P m (LExp 'Parsing)
     conApp = do
-      c <- qconName
+      c <- qconName <* sp
       es <- P.many (withLoc simpleExprCon)
       endLoc <- getSrcLoc
       sp

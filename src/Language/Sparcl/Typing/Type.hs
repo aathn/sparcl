@@ -77,8 +77,10 @@ data ConTy = ConTy ![TyVar]        -- universal variables
 instance Pretty ConTy where
   ppr (ConTy xs args ty) =
     let hd d = if null xs then d
-               else hsep [ text "forall", hsep (map ppr xs) <> text "." ] <> align d
-    in hd $ angles (hsep $ punctuate comma $ map ppr args) <> text "<->" <> ppr ty
+               else hsep [ text "forall", hsep (map ppr xs) <> text "." ] <+> align d
+        withArgs d = if null args then d
+                     else angles (hsep $ punctuate comma $ map ppr args) <+> text "<->" <+> d
+    in hd $ withArgs $ ppr ty
 
 instance MultiplicityLike Ty where
   one   = TyMult One
