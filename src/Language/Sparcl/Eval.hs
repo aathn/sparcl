@@ -1,5 +1,3 @@
-{-# LANGUAGE RecursiveDo #-}
-
 module Language.Sparcl.Eval where
 
 import           Language.Sparcl.Core.Syntax
@@ -35,6 +33,7 @@ mkValBool v =
 evalF :: Env -> Exp Name -> Value
 evalF env expr = case expr of
   Lit l -> VLit l
+
   Var n ->
     lookupEnvStrict n env
 

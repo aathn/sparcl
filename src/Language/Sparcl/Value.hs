@@ -20,11 +20,11 @@ type ValueTable = M.Map Name Value
 type Env = M.Map Name Value
 
 instance NFData Value where
-  rnf (VCon c vs)    = rnf (c, vs)
-  rnf (VLit l)       = rnf l
-  rnf (VFun env n _) = rnf (env, n)
-  rnf (VOp _)        = ()
-  rnf (VLift _ _)    = ()
+  rnf (VCon c vs)  = rnf (c, vs)
+  rnf (VLit l)     = rnf l
+  rnf (VFun _ n _) = rnf n
+  rnf (VOp _)      = ()
+  rnf (VLift _ _)  = ()
 
 instance Pretty Value where
   pprPrec _ (VCon c []) = ppr c
