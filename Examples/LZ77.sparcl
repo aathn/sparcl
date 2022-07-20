@@ -7,8 +7,8 @@ def fst (x, _) = x
 sig snd : forall a b. (a, b) -> b
 def snd (_, x) = x
 
-sig delete : (a -> a -> Bool) -> a -> a <-> ()
-def delete eq c *a = lift (\c' -> case eq c c' of | True -> () end) (\_ -> c) |> a
+sig delete : a -> a <-> ()
+def delete c *a = (\*() -> c) <| a
 
 sig and : Bool -> Bool -> Bool
 def and True True = True
@@ -59,15 +59,6 @@ sig revApp : List a -> List a -> List a
 def revApp Nil        l = l
          | (Cons h t) l = revApp t (Cons h l)
 
-sig eqList : (a -> a -> Bool) -> List a -> List a -> Bool
-def eqList eq Nil Nil = True
-         | eq (Cons h1 t1) (Cons h2 t2) =
-           case eq h1 h2 of
-           | True  -> eqList eq t1 t2
-           | False -> False
-           end
-         | eq _ _     = False
-
 data Maybe a = Nothing | Just a
 
 sig isNothing : Maybe a -> Bool
@@ -94,7 +85,7 @@ def lz77 = goLz77 Nil
         let *(match, lzRest) <- pin match <- match in
           goLz77 (take winLength (revApp match window)) |> rest in
         let *(p, ()) <- pin p <- (d, l) in
-          delete (eqList eqChar) (getMatch window p) |> match in
+          delete (getMatch window p) |> match in
         Cons (Pair p) lzRest
       end
   end

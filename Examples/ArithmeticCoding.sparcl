@@ -61,12 +61,12 @@ def encodeU (l, r) Nil         = l
 
 def origList = Cons A (Cons A (Cons B (Cons A (Cons C (Cons A (Cons B (Cons D (Cons A (Cons A (Cons EOS Nil))))))))))
 
-sig delete : (a -> a -> Bool) -> a -> a <-> ()
-def delete eq c *a = lift (\c' -> case eq c c' of | True -> () end) (\_ -> c) |> a
+sig delete : a -> a <-> ()
+def delete c *a = (\*() -> c) <| a
 
-sig deleteBy : (b -> b -> Bool) -> (a -> b) -> (a, b) <-> a
-def deleteBy eq f *(a, b) =
-  let *(a , ()) <- pin a' <- a in delete eq (f a') |> b in
+sig deleteBy : (a -> b) -> (a, b) <-> a
+def deleteBy f *(a, b) =
+  let *(a , ()) <- pin a' <- a in delete (f a') |> b in
     a
 
 sig eqSym : Symbol -> Symbol -> Bool
@@ -84,7 +84,7 @@ sig encodeR : Range -> List Symbol <-> Rational
 def encodeR (l, r) Nil         = l with eqRational l
           | (l, r) (Cons s ss) =
             let *(s, q) <- pin s' <- s in encodeR (narrowBySym (l, r) s') |> ss
-            in deleteBy eqSym (find (l, r)) |> (q, s)
+            in deleteBy (find (l, r)) |> (q, s)
 
 def codeU = arithCompU origList
 def code = arithCompR |> origList
