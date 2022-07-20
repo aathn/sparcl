@@ -556,10 +556,9 @@ checkTy lexp@(Loc loc expr) expectedTy = fmap (first $ Loc loc) $ atLoc loc $ at
       ty1   <- newMetaTy
       argTy <- newMetaTy
       resTy <- newMetaTy
-      m <- newMetaTy
 
       (e1', umap1) <- checkTyM e1 ty1 omega
-      atExp e1 $ atLoc (location e1) $ tryUnify (tyarr m argTy resTy) ty1
+      atExp e1 $ atLoc (location e1) $ tryUnify (argTy *-> resTy) ty1
       (e2', umap2) <- checkTyM e2 argTy omega
       tryUnify resTy expectedTy
 

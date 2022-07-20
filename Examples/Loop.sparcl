@@ -53,9 +53,9 @@ def revStep (Left Nil)   = Left Nil
           | (Left xs)    = Right (xs, Nil)
   with \x -> case x of Right (_,ys) -> null ys | _ -> False end
           | (Right (Nil, ys))  = Left ys
-  with \x -> case x of Left ys -> not (null ys) | _ -> False end
+  with \x -> case x of Left ys -> not |> null ys | _ -> False end
           | (Right (Cons a xs, ys)) = Right (xs, Cons a ys)
-  with \x -> case x of Right (_,ys) -> not (null ys) | _ -> False end
+  with \x -> case x of Right (_,ys) -> not |> null ys | _ -> False end
 
 sig reverseByTrace : List a <-> List a
 def reverseByTrace = trace revStep
@@ -81,7 +81,7 @@ def msb2natStep
       | (Right (Nil, n)) = Left n                  with isLeft
       | (Right (Cons x xs, n)) =
           Right (xs, case x of B0 -> double |> n with even | B1 -> S (double |> n) with odd end)
-          with \x -> case x of Right (_, n) -> not (isZ n) | _ -> False end
+          with \x -> case x of Right (_, n) -> not |> isZ n | _ -> False end
 
 
 

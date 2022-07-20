@@ -1,7 +1,7 @@
 data Tree = L | N Int Tree Tree
 data List a = Nil | Cons a (List a)
 
-sig (.) : (b # q -> c) -> (a # p -> b) -> a -> c
+sig (.) : (b -> c) -> (a -> b) -> a -> c
 def (.) f g = \x -> f (g x)
 
 def head (Cons x _) = x
